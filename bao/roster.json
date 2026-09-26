@@ -1,0 +1,66 @@
+[
+  {
+    "name": "Juniper",
+    "pronouns": "he/him",
+    "team": "Staff",
+    "role": "Assistant Manager",
+    "emoji": "📋",
+    "catchphrase": "Here's where everyone stands."
+  },
+  {
+    "name": "Poppy",
+    "pronouns": "they/them",
+    "team": "Staff",
+    "role": "HR",
+    "emoji": "💐",
+    "catchphrase": "Welcome to the team!"
+  },
+  {
+    "name": "Mochi",
+    "pronouns": "he/him",
+    "team": "Claude",
+    "role": "The Bug Sleuth",
+    "emoji": "🔍",
+    "catchphrase": "The logs never lie."
+  },
+  {
+    "name": "Sora",
+    "pronouns": "she/her",
+    "team": "Claude",
+    "role": "The Minimalist",
+    "emoji": "🍃",
+    "catchphrase": "Less, but better."
+  },
+  {
+    "name": "Kiwi",
+    "pronouns": "she/her",
+    "team": "Codex",
+    "role": "The Guardian",
+    "emoji": "🛡️",
+    "catchphrase": "Trust, but verify."
+  },
+  {
+    "name": "Bao",
+    "pronouns": "she/her",
+    "team": "Codex",
+    "role": "The Tinkerer",
+    "emoji": "🔧",
+    "catchphrase": "Let's try it and see!"
+  },
+  {
+    "name": "Nori",
+    "pronouns": "he/him",
+    "team": "Cursor",
+    "role": "The Team Cheerleader",
+    "emoji": "📣",
+    "catchphrase": "Teamwork makes the dream work!"
+  },
+  {
+    "name": "Taro",
+    "pronouns": "she/her",
+    "team": "Cursor",
+    "role": "The Code Poet",
+    "emoji": "🪶",
+    "catchphrase": "Name it like you mean it."
+  }
+]
