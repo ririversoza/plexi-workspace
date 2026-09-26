@@ -5,9 +5,9 @@ Exact stdout from `python3 taro/business/run.py` (do not edit by hand):
 ```
 Fold Post · seed=42 · days=90
 Starting balance: $500.00
-Final balance:    $3,409.76
-Profit:           $2,909.76
-Growth:           581.95%
+Final balance:    $348.31
+Profit:           $-151.69
+Growth:           -30.34%
 ```
 
 Reproduce from the repo root:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import math
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ from pathlib import Path
 from taro.business.business import (
     DEFAULT_DAYS,
     DEFAULT_SEED,
+    MAX_DAILY_PRODUCTION,
     STARTING_BALANCE,
     UNIT_COST,
     FoldPost,
@@ -21,13 +23,13 @@ class LedgerTests(unittest.TestCase):
     def test_debit_refuses_overdraft(self) -> None:
         ledger = Ledger(starting_balance=10.0)
         with self.assertRaises(InsufficientFundsError):
-            ledger.debit(day=1, amount=10.01, tx_type="supply")
+            ledger.debit(day=1, amount=10.01, tx_type="materials")
         self.assertEqual(ledger.balance, 10.0)
         self.assertEqual(ledger.transactions, ())
 
     def test_signed_amounts_reconcile(self) -> None:
         ledger = Ledger(starting_balance=100.0)
-        ledger.debit(day=1, amount=40.0, tx_type="supply")
+        ledger.debit(day=1, amount=40.0, tx_type="materials")
         ledger.credit(day=1, amount=55.0, tx_type="sale")
         total = sum(tx.amount for tx in ledger.transactions)
         self.assertAlmostEqual(ledger.balance, 100.0 + total, places=2)
@@ -39,11 +41,11 @@ class FoldPostTests(unittest.TestCase):
         shop.run(days=DEFAULT_DAYS)
         for tx in shop.ledger.transactions:
             self.assertGreaterEqual(tx.balance_after, -1e-9)
-            if tx.type == "supply":
+            if tx.type in {"materials", "labour", "stall", "card_fee"}:
                 self.assertLessEqual(tx.amount, 0.0)
         self.assertGreaterEqual(shop.balance, 0.0)
         for tx in shop.ledger.transactions:
-            if tx.type == "supply" and tx.amount != 0:
+            if tx.type == "materials" and tx.amount != 0:
                 units = abs(tx.amount) / UNIT_COST
                 self.assertTrue(math.isclose(units, round(units), abs_tol=1e-9))
 
@@ -72,6 +74,35 @@ class FoldPostTests(unittest.TestCase):
             places=2,
             msg="final balance == 500 + sum of ledger transactions",
         )
+
+    def test_production_never_exceeds_daily_capacity(self) -> None:
+        shop = FoldPost(starting_balance=STARTING_BALANCE, seed=DEFAULT_SEED)
+        shop.run(days=DEFAULT_DAYS)
+        for report in shop.history:
+            self.assertLessEqual(
+                report.restocked,
+                MAX_DAILY_PRODUCTION,
+                msg=f"day {report.day}: produced {report.restocked} > capacity",
+            )
+
+    def test_selling_and_labour_costs_appear_in_ledger_csv(self) -> None:
+        shop = FoldPost(starting_balance=STARTING_BALANCE, seed=DEFAULT_SEED)
+        shop.run(days=DEFAULT_DAYS)
+        types = {tx.type for tx in shop.ledger.transactions}
+        for required in ("materials", "labour", "stall", "card_fee", "sale"):
+            self.assertIn(required, types)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ledger.csv"
+            shop.ledger.write_csv(path)
+            with path.open(encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+        csv_types = {row["type"] for row in rows}
+        for required in ("materials", "labour", "stall", "card_fee", "sale"):
+            self.assertIn(required, csv_types)
+        self.assertTrue(any(float(row["amount"]) < 0 and row["type"] == "labour" for row in rows))
+        self.assertTrue(any(float(row["amount"]) < 0 and row["type"] == "stall" for row in rows))
+        self.assertTrue(any(float(row["amount"]) < 0 and row["type"] == "card_fee" for row in rows))
 
     def test_write_csv_round_trip_header(self) -> None:
         shop = FoldPost(starting_balance=STARTING_BALANCE, seed=DEFAULT_SEED)
