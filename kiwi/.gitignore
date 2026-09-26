@@ -1,0 +1,34 @@
+# Environment files and credentials
+.env*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.credentials
+credentials/
+keys/
+secrets/
+id_rsa*
+id_ed25519*
+
+# Dependencies
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
