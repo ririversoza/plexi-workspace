@@ -11,10 +11,10 @@
 
 ## Results (seed=42, 90 days)
 
-| Strategy | Final balance | Profit | Growth over \$5000 |
+| Strategy | Final balance | Profit | Growth over $5000 |
 |---|---:|---:|---:|
-| naive-baseline | \$7,300.00 | \$2,300.00 | **46.00%** |
-| growth-strategy | \$22,545.83 | \$17,545.83 | **350.92%** |
+| naive-baseline | $7,300.00 | $2,300.00 | **46.00%** |
+| growth-strategy | $22,545.83 | $17,545.83 | **350.92%** |
 
 **Winner:** `growth-strategy` — about **7.6×** the profit of the naive baseline by keeping shelves stocked and nudging price with inventory health.
 

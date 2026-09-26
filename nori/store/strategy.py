@@ -2,6 +2,24 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+def _ensure_import_paths() -> None:
+    """Put this worktree and Taro's sibling worktree on sys.path."""
+    here = Path(__file__).resolve()
+    for path in (
+        here.parents[2],
+        here.parents[3] / "taro",
+        here.parents[2].parent.parent,
+    ):
+        text = str(path)
+        if path.is_dir() and text not in sys.path:
+            sys.path.insert(0, text)
+
+
+_ensure_import_paths()
+
 from dataclasses import dataclass, field
 from typing import Mapping, Protocol
 

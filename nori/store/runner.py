@@ -7,10 +7,20 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-# Repo root on path so `taro.store` and `nori.store` import cleanly.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+def _ensure_import_paths() -> None:
+    """Put this worktree and Taro's sibling worktree on sys.path."""
+    here = Path(__file__).resolve()
+    for path in (
+        here.parents[2],
+        here.parents[3] / "taro",
+        here.parents[2].parent.parent,
+    ):
+        text = str(path)
+        if path.is_dir() and text not in sys.path:
+            sys.path.insert(0, text)
+
+
+_ensure_import_paths()
 
 from taro.store import DayReport, Store
 
