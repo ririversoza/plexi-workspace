@@ -22,7 +22,6 @@ DEFAULT_SEED = 42
 DEFAULT_DAYS = 90
 
 UNIT_COST = 2.50  # paper, envelope, adhesive per finished pack (materials only)
-LABOUR_PER_PACK = 3.00  # folding time ~20–25 min at a modest craft wage
 STALL_FEE = 15.00  # daily craft-market / booth pitch fee
 CARD_FEE_RATE = 0.029  # card-reader fee as a share of sale revenue
 MAX_DAILY_PRODUCTION = 8  # handmade packs one person can finish in a day
@@ -36,8 +35,7 @@ DAYS_OF_COVER = 5.0
 LOW_STOCK_DAYS = 2.0
 PREMIUM = 1.05
 DISCOUNT = 0.97
-MIN_MARGIN_RATIO = 1.15  # price floor vs materials + labour
-CASH_COST_PER_PACK = UNIT_COST + LABOUR_PER_PACK
+MIN_MARGIN_RATIO = 1.15  # price floor vs materials cost
 
 
 @dataclass(frozen=True)
@@ -107,17 +105,14 @@ class FoldPost:
         price = self._choose_price()
         self._price = price
 
-        # Handmade production: materials + labour, capped by daily capacity.
+        # Handmade production: materials only, capped by daily capacity.
         want = self._choose_production()
-        affordable = self._ledger.max_affordable_units(CASH_COST_PER_PACK)
+        affordable = self._ledger.max_affordable_units(UNIT_COST)
         units = min(want, affordable, MAX_DAILY_PRODUCTION)
         supply_cost = 0.0
         if units > 0:
-            materials = round(units * UNIT_COST, 2)
-            labour = round(units * LABOUR_PER_PACK, 2)
-            supply_cost = round(materials + labour, 2)
-            self._ledger.debit(self._day, materials, tx_type="materials")
-            self._ledger.debit(self._day, labour, tx_type="labour")
+            supply_cost = round(units * UNIT_COST, 2)
+            self._ledger.debit(self._day, supply_cost, tx_type="materials")
             self._stock += units
 
         # Stall fee required to open and sell; skip sales if unaffordable.
@@ -154,7 +149,7 @@ class FoldPost:
         return report
 
     def _choose_price(self) -> float:
-        floor = round(CASH_COST_PER_PACK * MIN_MARGIN_RATIO, 2)
+        floor = round(UNIT_COST * MIN_MARGIN_RATIO, 2)
         thin = self._stock < BASE_DAILY_DEMAND * LOW_STOCK_DAYS
         if self._prior_missed > 0 or thin:
             target = LIST_PRICE * DISCOUNT

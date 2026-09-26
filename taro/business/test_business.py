@@ -41,7 +41,7 @@ class FoldPostTests(unittest.TestCase):
         shop.run(days=DEFAULT_DAYS)
         for tx in shop.ledger.transactions:
             self.assertGreaterEqual(tx.balance_after, -1e-9)
-            if tx.type in {"materials", "labour", "stall", "card_fee"}:
+            if tx.type in {"materials", "stall", "card_fee"}:
                 self.assertLessEqual(tx.amount, 0.0)
         self.assertGreaterEqual(shop.balance, 0.0)
         for tx in shop.ledger.transactions:
@@ -85,12 +85,13 @@ class FoldPostTests(unittest.TestCase):
                 msg=f"day {report.day}: produced {report.restocked} > capacity",
             )
 
-    def test_selling_and_labour_costs_appear_in_ledger_csv(self) -> None:
+    def test_selling_costs_appear_in_ledger_csv(self) -> None:
         shop = FoldPost(starting_balance=STARTING_BALANCE, seed=DEFAULT_SEED)
         shop.run(days=DEFAULT_DAYS)
         types = {tx.type for tx in shop.ledger.transactions}
-        for required in ("materials", "labour", "stall", "card_fee", "sale"):
+        for required in ("materials", "stall", "card_fee", "sale"):
             self.assertIn(required, types)
+        self.assertNotIn("labour", types)
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "ledger.csv"
@@ -98,9 +99,8 @@ class FoldPostTests(unittest.TestCase):
             with path.open(encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
         csv_types = {row["type"] for row in rows}
-        for required in ("materials", "labour", "stall", "card_fee", "sale"):
+        for required in ("materials", "stall", "card_fee", "sale"):
             self.assertIn(required, csv_types)
-        self.assertTrue(any(float(row["amount"]) < 0 and row["type"] == "labour" for row in rows))
         self.assertTrue(any(float(row["amount"]) < 0 and row["type"] == "stall" for row in rows))
         self.assertTrue(any(float(row["amount"]) < 0 and row["type"] == "card_fee" for row in rows))
 
