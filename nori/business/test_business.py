@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import sys
 import tempfile
 import unittest
@@ -13,13 +14,28 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from nori.business.business import (  # noqa: E402
+    DAILY_CART_RENTAL,
+    DAILY_FUEL,
+    DAILY_INSURANCE,
+    DAILY_OVERHEAD_TOTAL,
+    DAILY_PITCH_PERMIT,
     DEFAULT_DAYS,
     DEFAULT_SEED,
     STARTING_BALANCE,
+    STARTER_EQUIPMENT,
     UNIT_COST,
     MatchaMile,
 )
 from nori.business.ledger import InsufficientFundsError, Ledger  # noqa: E402
+
+REQUIRED_COST_TYPES = {
+    "equipment",
+    "cart_rental",
+    "pitch_permit",
+    "fuel",
+    "insurance",
+    "supply",
+}
 
 
 class LedgerTests(unittest.TestCase):
@@ -95,6 +111,45 @@ class SimulationTests(unittest.TestCase):
         self.assertTrue(text.startswith("day,type,amount,balance_after\n"))
         self.assertIn("supply", text)
         self.assertIn("sale", text)
+
+    def test_real_costs_appear_in_ledger_csv(self) -> None:
+        """Equipment, cart rental, pitch, fuel, and insurance must hit the ledger."""
+        cart = MatchaMile(starting_balance=STARTING_BALANCE, seed=DEFAULT_SEED)
+        cart.run(days=DEFAULT_DAYS)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ledger.csv"
+            cart.ledger.write_csv(path)
+            with path.open(encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+
+        types = {row["type"] for row in rows}
+        for required in REQUIRED_COST_TYPES:
+            self.assertIn(required, types, msg=f"missing ledger type {required}")
+
+        equipment = [r for r in rows if r["type"] == "equipment"]
+        self.assertEqual(len(equipment), 1)
+        self.assertEqual(equipment[0]["day"], "1")
+        self.assertEqual(equipment[0]["amount"], f"-{STARTER_EQUIPMENT:.2f}")
+
+        open_days = sum(1 for report in cart.history if report.is_open)
+        self.assertGreater(open_days, 0)
+        self.assertEqual(sum(1 for r in rows if r["type"] == "cart_rental"), open_days)
+        self.assertEqual(sum(1 for r in rows if r["type"] == "pitch_permit"), open_days)
+        self.assertEqual(sum(1 for r in rows if r["type"] == "fuel"), open_days)
+        self.assertEqual(sum(1 for r in rows if r["type"] == "insurance"), open_days)
+
+        rental_total = sum(float(r["amount"]) for r in rows if r["type"] == "cart_rental")
+        self.assertAlmostEqual(rental_total, -DAILY_CART_RENTAL * open_days, places=2)
+        pitch_total = sum(float(r["amount"]) for r in rows if r["type"] == "pitch_permit")
+        self.assertAlmostEqual(pitch_total, -DAILY_PITCH_PERMIT * open_days, places=2)
+        fuel_total = sum(float(r["amount"]) for r in rows if r["type"] == "fuel")
+        self.assertAlmostEqual(fuel_total, -DAILY_FUEL * open_days, places=2)
+        insurance_total = sum(float(r["amount"]) for r in rows if r["type"] == "insurance")
+        self.assertAlmostEqual(insurance_total, -DAILY_INSURANCE * open_days, places=2)
+
+        for report in cart.history:
+            if report.is_open:
+                self.assertAlmostEqual(report.overhead_cost, DAILY_OVERHEAD_TOTAL, places=2)
 
 
 if __name__ == "__main__":

@@ -5,9 +5,9 @@ Exact stdout from `python3 nori/business/run.py` (seed=42, 90 days). Do not hand
 ```
 Matcha Mile · seed=42 · days=90
 Starting balance: $500.00
-Final balance:    $3,456.70
-Profit:           $2,956.70
-Growth:           591.34%
+Final balance:    $30.25
+Profit:           $-469.75
+Growth:           -93.95%
 ```
 
 Captured by regenerating `ledger.csv` with the same command.

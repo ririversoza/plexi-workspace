@@ -28,6 +28,24 @@ BASE_DAILY_DEMAND = 9.0  # expected drinks/day at list price
 MAX_DAILY_DEMAND = 24  # hard cap — cart foot traffic is bounded
 ELASTICITY = 1.25  # demand falls as price rises above list
 
+# Cart / equipment. A used bicycle coffee cart runs about $750 — more than the
+# $500 start — so day 1 buys only a small starter kit and rents the cart daily.
+CART_PURCHASE_PRICE = 750.0  # documented; not charged (unaffordable at start)
+STARTER_EQUIPMENT = 95.0  # whisks, bowls, thermos, cooler bag, chalkboard
+DAILY_CART_RENTAL = 18.00
+DAILY_PITCH_PERMIT = 12.00  # sidewalk / market pitch + permit share
+DAILY_FUEL = 4.00  # propane for hot water + light transport
+DAILY_INSURANCE = 3.00  # food-cart liability, ~$1,095/yr prorated
+
+# Ordered so the ledger shows each overhead line separately.
+DAILY_OVERHEAD: tuple[tuple[str, float], ...] = (
+    ("cart_rental", DAILY_CART_RENTAL),
+    ("pitch_permit", DAILY_PITCH_PERMIT),
+    ("fuel", DAILY_FUEL),
+    ("insurance", DAILY_INSURANCE),
+)
+DAILY_OVERHEAD_TOTAL = round(sum(amount for _, amount in DAILY_OVERHEAD), 2)
+
 # Operator policy (endogenous: no hardcoded revenue)
 DAYS_OF_COVER = 6.0
 LOW_STOCK_DAYS = 2.0
@@ -40,6 +58,8 @@ MIN_MARGIN_RATIO = 1.20  # price floor vs unit cost
 class DayReport:
     day: int
     price: float
+    is_open: bool
+    overhead_cost: float
     restocked: int
     supply_cost: float
     demand: int
@@ -103,6 +123,37 @@ class MatchaMile:
         price = self._choose_price()
         self._price = price
 
+        if self._day == 1:
+            # Full cart (~$750) is unaffordable; buy only the starter kit.
+            assert STARTER_EQUIPMENT < CART_PURCHASE_PRICE
+            assert not self._ledger.can_afford(CART_PURCHASE_PRICE)
+            self._ledger.debit(self._day, STARTER_EQUIPMENT, tx_type="equipment")
+
+        # Fixed daily costs before any restock or sales. If cash is short, stay closed.
+        if not self._ledger.can_afford(DAILY_OVERHEAD_TOTAL):
+            demand = self._sample_demand(price)
+            report = DayReport(
+                day=self._day,
+                price=price,
+                is_open=False,
+                overhead_cost=0.0,
+                restocked=0,
+                supply_cost=0.0,
+                demand=demand,
+                sold=0,
+                missed_sales=demand,
+                revenue=0.0,
+                stock=self._stock,
+                balance=self._ledger.balance,
+            )
+            self._prior_missed = demand
+            self.history.append(report)
+            return report
+
+        for tx_type, amount in DAILY_OVERHEAD:
+            self._ledger.debit(self._day, amount, tx_type=tx_type)
+        overhead_cost = DAILY_OVERHEAD_TOTAL
+
         want = self._choose_restock()
         affordable = self._ledger.max_affordable_units(UNIT_COST)
         units = min(want, affordable)
@@ -124,6 +175,8 @@ class MatchaMile:
         report = DayReport(
             day=self._day,
             price=price,
+            is_open=True,
+            overhead_cost=overhead_cost,
             restocked=units,
             supply_cost=supply_cost,
             demand=demand,
