@@ -111,6 +111,21 @@ system: it never ticks, emits or touches `town.rng`.
 
   `test_view_phase3.py` gives each key a present case, an absent case and an odd-value
   case, and checks a frame with none of them against a golden copy of the pre-Phase 3 output.
+- **Phase 4 taxes and bills** (`bills.py`, keys from juniper/TINYTOWN.md, today's int
+  cents) add a `BILLS TODAY` panel under RESIDENTS once any Phase 4 key exists:
+
+  ```
+  BILLS TODAY  residents: tax $12.34 | utilities $1.80 | rent $18.00
+               shops:     tax $0.50 | licence $2.00 | rent $8.00
+               behind:    residents 2 ($7.50 owed) | shops 1 ($8.00 owed)
+  ```
+
+  `bills_paid_cents` is the treasury-bound part (utilities, licence) and `rent_paid_cents`
+  is rent. Totals may be ints or `{id: cents}` dicts. "Behind" counts use
+  `residents.in_arrears`, else the per-person `arrears_cents`; shops use each
+  `shops[id].arrears_cents`, else a per-shop `businesses.arrears_cents` dict. Any missing or
+  odd value shows `n/a`. With no Phase 4 key at all the frame is unchanged, which
+  `test_view_phase4.py` checks against the same golden copy.
 
 Systems come from the engine's own `SYSTEM_MODULES`, so the viewer only loads what that
 engine version ticks. Anything missing is drawn as `not built yet`, and odd or missing
@@ -166,6 +181,12 @@ day N, default the last day:
 - **Shops** as buildings coloured by balance: red at $0 or below, green for the richest
   shop that day, grey when the balance is unknown; closed shops are dashed and faded. Shops
   have no street address in state, so they get their own block instead of an invented one.
+
+Once Phase 4 keys exist, a **red dot** marks each house whose resident has
+`arrears_cents > 0` and each shop that owes money (its status reads `open · owes $8.00`).
+Streets note `N behind`, the header counts `2 households, 1 shop behind` (or `behind n/a`
+when no per-entity arrears are reported), and the legend explains the dot. Before Phase 4
+the page is byte-identical to the one above.
 
 Light and dark follow `prefers-color-scheme`, and the SVG scales to the screen width, so
 it reads on a phone. It reads state only: no `town.rng` draws, the log is loaded with
