@@ -50,7 +50,50 @@ Assumptions and numbers:
 Reads: `town.day`, `town.rng`, `weather.condition`, `businesses.shops`
 (`open`, `price_cents`, `available`), and `businesses.wages_paid`.
 Writes only `residents`: `people`, `purchases`, `spent_cents`, `count`,
-`employed`, and `avg_wallet_cents`.
+`employed`, `avg_wallet_cents`, `avg_mood`, and `mood_bands`. Each person also
+has an integer `mood`.
+
+## Phase 3 mood
+
+Mood is a fictional, descriptive score, not an input to shopping, wages, or
+any other economic decision. Each tick recomputes it after wages and purchases:
+
+```text
+mood = clamp(40 + wallet_points + employment_points + purchase_points
+             - weather_penalty, 0, 100)
+```
+
+- Wallet points: one point per complete 1,000 cents ($10) of remaining wallet,
+  capped at 40 points ($400). No fractions; more savings above $400 have no effect.
+- Employment: +10 if `job is not None`, otherwise -10. This records employment
+  status, not whether wages were actually received today.
+- Purchases: +10 if at least one purchase succeeded today, otherwise 0.
+  Two purchases still give only +10. Failed visits do not count; the bonus
+  resets each tick. Wallet points use the balance after paying for purchases.
+- Weather penalties: sun 0, cloud 5, rain 10, snow 15, storm 25. Missing,
+  invalid, or unknown weather has no penalty, matching the sun fallback.
+- Bands: `happy` = 70–100, `ok` = 40–69, `unhappy` = 0–39. `mood_bands`
+  always contains all three integer counts, totaling 120. `avg_mood` is the
+  floor of the sum of scores divided by 120.
+- Setup initializes mood from starting wallets and jobs, with no purchases
+  and neutral weather. It does not read another system's state.
+- No mood history, events, or RNG draws. Existing shopping RNG calls remain
+  unchanged. Only the new mood fields are written by the derived calculation.
+
+`fixtures/phase2_residents.py` is a frozen test reference from main commit
+`1c3a689c0c575a9c0413c36a714334682b94923e`, not a second production system.
+Regression tests compare UTF-8 JSON bytes for all pre-existing resident fields
+and exact RNG states at setup and after every tick, with and without businesses,
+across seeds 1, 42, and 99. Do not update the reference alongside mood changes.
+
+Full-town validation against that main revision (CSV logging disabled, no
+scratch/output files) also compared every day's non-mood state bytes, RNG state,
+and events for seed 42 and seeds 1–20 over 90 days: all identical. Seed 42 ends
+with 6 shops open, $500.88 average wallet, and no zero-balance streaks. Mood is
+65 on average, with 87 happy, 15 ok, and 18 unhappy residents. 18/20 seeds meet
+all balance targets; seeds 10 and 17 fail in both baseline and mood runs.
+This is the current main baseline; the older Phase 2 archive results below
+are historical. Thirteen standalone resident tests pass.
 
 Run standalone tests from the repository root:
 
@@ -58,7 +101,7 @@ Run standalone tests from the repository root:
 python3 -m unittest discover -s kiwi/townfolk -t .
 ```
 
-## Combined balance verification
+## Historical Phase 2 combined balance verification
 
 Seed 42, 90 days: **6/6 shops open**, **$467.80 average wallet**, and
 **zero days at $0 for every shop** (longest zero streak: 0 days).

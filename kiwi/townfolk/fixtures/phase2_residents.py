@@ -1,3 +1,5 @@
+# Frozen behavioral reference from main 1c3a689c0c575a9c0413c36a714334682b94923e.
+# Test fixture only: do not update alongside production implementation.
 """Named residents, weekday wages, and stock-limited daily purchases."""
 
 SHOP_IDS = (
@@ -15,7 +17,6 @@ HEALTHY_WALLET_CENTS = 10000
 STAFF_COUNTS = {shop: 2 if shop in ("bench-and-bell", "spoke-and-spanner") else 1
                 for shop in SHOP_IDS}
 VISIT_CHANCE = {"sun": 0.65, "cloud": 0.55, "rain": 0.35, "snow": 0.20, "storm": 0.0}
-MOOD_WEATHER_PENALTY = {"sun": 0, "cloud": 5, "rain": 10, "snow": 15, "storm": 25}
 
 
 def _mapping(value):
@@ -34,23 +35,6 @@ def _summarize(state):
     state["avg_wallet_cents"] = sum(person["wallet_cents"] for person in people) // len(people)
 
 
-def _update_mood(state, bought_today, condition="sun"):
-    """Derived state only: no RNG, remembered mood, or economic side effects."""
-    penalty = MOOD_WEATHER_PENALTY.get(condition, 0) if isinstance(condition, str) else 0
-    bands = {"happy": 0, "ok": 0, "unhappy": 0}
-    total = 0
-    for person in state["people"]:
-        wallet_points = min(40, _cents(person["wallet_cents"]) // 1000)
-        employment_points = 10 if person["job"] is not None else -10
-        purchase_points = 10 if person["id"] in bought_today else 0
-        mood = max(0, min(100, 40 + wallet_points + employment_points + purchase_points - penalty))
-        person["mood"] = mood
-        total += mood
-        bands["happy" if mood >= 70 else "ok" if mood >= 40 else "unhappy"] += 1
-    state["avg_mood"] = total // len(state["people"]) if state["people"] else 0
-    state["mood_bands"] = bands
-
-
 class System:
     name = "residents"
 
@@ -66,7 +50,6 @@ class System:
         ]
         state = {"people": people, "purchases": {}, "spent_cents": {}}
         _summarize(state)
-        _update_mood(state, set())
         town.state[self.name] = state
 
     def tick(self, town):
@@ -79,7 +62,6 @@ class System:
         chance = VISIT_CHANCE.get(condition, 0.65) if isinstance(condition, str) else 0.65
         weekday = town.day >= 1 and (town.day - 1) % 7 < 5
         purchases, spent = {}, {}
-        bought_today = set()
         stock, prices = {}, {}
         for shop_id in SHOP_IDS:
             shop = _mapping(shops.get(shop_id))
@@ -109,11 +91,9 @@ class System:
                 visited.add(shop_id)
                 price = prices[shop_id]
                 person["wallet_cents"] -= price
-                bought_today.add(person["id"])
                 stock[shop_id] -= 1
                 purchases[shop_id] = purchases.get(shop_id, 0) + 1
                 spent[shop_id] = spent.get(shop_id, 0) + price
         state["purchases"] = purchases
         state["spent_cents"] = spent
         _summarize(state)
-        _update_mood(state, bought_today, condition)
