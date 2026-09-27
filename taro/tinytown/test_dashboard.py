@@ -90,7 +90,7 @@ def _tiny_timeline() -> dict:
                 "residents": {"count": 120, "employed": 90, "avg_wallet_cents": 2550},
             },
         ],
-        "events_by_kind": {"tick": 3},
+        "events_by_kind": {"weather.tick": 3},
     }
 
 

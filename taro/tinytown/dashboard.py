@@ -7,6 +7,7 @@ write one static HTML file to ``--out``. Read-only: no extra ``town.rng`` draws.
 from __future__ import annotations
 
 import argparse
+import copy
 import html
 import importlib
 import json
@@ -91,7 +92,7 @@ def _snapshot_day(town: Any) -> Dict[str, Any]:
     for key in ("weather", "economy", "traffic", "emergency"):
         state = town.state.get(key)
         if isinstance(state, dict):
-            entry[key] = dict(state)
+            entry[key] = copy.deepcopy(state)
 
     businesses = town.state.get("businesses")
     if isinstance(businesses, dict):
@@ -125,8 +126,11 @@ def _snapshot_day(town: Any) -> Dict[str, Any]:
 def _count_events_by_kind(town: Any) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for event in getattr(town, "events", []):
+        system = event.get("system")
+        system_key = "" if system is None else str(system)
         kind = str(event.get("kind", ""))
-        counts[kind] = counts.get(kind, 0) + 1
+        key = f"{system_key}.{kind}"
+        counts[key] = counts.get(key, 0) + 1
     return counts
 
 
