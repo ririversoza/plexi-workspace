@@ -93,8 +93,11 @@ system: it never ticks, emits or touches `town.rng`.
     the price, and nothing when they're equal. The base is the shop's `base_price_cents` if
     state has one, otherwise the catalog price copied from `nori/shops/README.md`
     (`BASE_PRICE_CENTS`). Shops not in that table get no arrow.
-  - `economy.project` (a string, or a dict with `"name"`) / `projects_completed` (Sora) add a
-    `town hall: building Library | 2 completed` ticker line.
+  - `economy.project` / `projects_completed` (Sora's public works) add a ticker line like
+    `town hall: building market square (70%) | 2 completed`. `project` is a dict with
+    `"name"` and `"progress"` (0..1); `None` shows `no project` (between projects, or all
+    done). `projects_completed` is a list of names and is shown as a count. A plain string
+    project or an int count also work.
   - `traffic.bus_running` / `bus_riders` (Bao) add `, bus running (12 riders)` (or `no bus`,
     or `bus n/a`) to the traffic line.
 

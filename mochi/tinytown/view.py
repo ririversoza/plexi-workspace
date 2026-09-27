@@ -240,13 +240,26 @@ def treasury_text(state):
     return dollars(economy.get("treasury"))
 
 
-def project_name(project):
-    """A project as text: a plain string, or a dict's "name"; None when unusable."""
+def project_text(project):
+    """Sora's ``project``: a dict with "name" (and "progress" 0..1), a plain string, or None."""
+    if project is None:
+        return "no project"
     if isinstance(project, str) and project:
-        return project
+        return f"building {project}"
     if isinstance(project, dict) and project.get("name"):
-        return str(project["name"])
-    return None
+        progress = project.get("progress")
+        percent = f" ({int(progress * 100)}%)" if is_number(progress) and 0 <= progress <= 1 else ""
+        return f"building {project['name']}{percent}"
+    return "building n/a"
+
+
+def completed_text(done):
+    """Sora's ``projects_completed`` is a list of names; a plain count is accepted too."""
+    if isinstance(done, (list, tuple)):
+        return f"{len(done)} completed"
+    if is_number(done):
+        return f"{done} completed"
+    return "completed n/a"
 
 
 def town_hall_text(state):
@@ -254,10 +267,8 @@ def town_hall_text(state):
     economy = state.get("economy")
     if not isinstance(economy, dict) or ("project" not in economy and "projects_completed" not in economy):
         return None
-    name = project_name(economy.get("project"))
-    done = economy.get("projects_completed")
-    done_text = f"{done} completed" if is_number(done) else "completed n/a"
-    return f"building {name or 'n/a'} | {done_text}"
+    project = economy.get("project") if "project" in economy else ""
+    return f"{project_text(project)} | {completed_text(economy.get('projects_completed'))}"
 
 
 def ticker(state):

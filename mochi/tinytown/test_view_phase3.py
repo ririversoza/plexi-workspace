@@ -112,17 +112,30 @@ class PriceArrowTest(unittest.TestCase):
 
 
 class TownHallTest(unittest.TestCase):
-    def test_string_or_dict_project_with_count(self):
-        text = view.render(with_keys("economy", project="Library", projects_completed=2), 1)
-        self.assertEqual(line_with(text, "town hall:"), "         town hall: building Library | 2 completed")
-        text = view.render(with_keys("economy", project={"name": "Park", "cost_cents": 5}), 1)
-        self.assertIn("building Park | completed n/a", text)
+    def town_hall(self, **keys):
+        return line_with(view.render(with_keys("economy", **keys), 1), "town hall:")
 
-    def test_only_count_or_empty_project(self):
-        text = view.render(with_keys("economy", projects_completed=3), 1)
-        self.assertIn("building n/a | 3 completed", text)
-        text = view.render(with_keys("economy", project=None, projects_completed="x"), 1)
-        self.assertIn("building n/a | completed n/a", text)
+    def test_sora_shapes_dict_project_and_list_of_names(self):
+        # Shapes from #41 (sora-public-works): project dict in dollars, completed list of str.
+        project = {"name": "market square", "cost": 400.0, "paid": 280.0, "progress": 0.7}
+        self.assertEqual(
+            self.town_hall(project=project, projects_completed=["park", "bike lane"]),
+            "         town hall: building market square (70%) | 2 completed",
+        )
+
+    def test_between_projects_and_all_done(self):
+        self.assertTrue(self.town_hall(project=None, projects_completed=[]).endswith("no project | 0 completed"))
+        done = ["park", "bike lane", "market square"]
+        self.assertTrue(self.town_hall(project=None, projects_completed=done).endswith("no project | 3 completed"))
+
+    def test_string_project_and_plain_count_still_work(self):
+        self.assertTrue(self.town_hall(project="Library", projects_completed=2).endswith("building Library | 2 completed"))
+        self.assertTrue(self.town_hall(project={"name": "Park", "cost": 5}).endswith("building Park | completed n/a"))
+
+    def test_only_one_key_or_odd_values(self):
+        self.assertTrue(self.town_hall(projects_completed=["park"]).endswith("building n/a | 1 completed"))
+        self.assertTrue(self.town_hall(project=42, projects_completed="x").endswith("building n/a | completed n/a"))
+        self.assertTrue(self.town_hall(project={"name": "Pier", "progress": 7}).endswith("building Pier | completed n/a"))
 
     def test_absent_means_no_town_hall_line(self):
         self.assertIsNone(line_with(view.render(fake_state(), 1), "town hall:"))
