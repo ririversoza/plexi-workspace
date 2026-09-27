@@ -11,9 +11,11 @@ from pathlib import Path
 import taro.tinytown.dashboard as dash
 import taro.tinytown.run as run
 from taro.tinytown.dashboard import (
+    _series_arrears,
     _series_avg_wallet,
     _series_congestion,
     _series_shop_balances,
+    _series_taxes_and_bills,
     _weather_conditions,
     cli,
     collect_timeline,
@@ -194,6 +196,8 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("prefers-color-scheme", html)
         self.assertIn("Shop balances", html)
         self.assertIn("average wallet", html.lower())
+        self.assertIn("Taxes and bills", html)
+        self.assertIn("Arrears", html)
         self.assertIn("Weather strip", html)
         self.assertIn("Traffic congestion", html)
         self.assertIn("leaderboard", html.lower())
@@ -336,6 +340,54 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(len(row["avg_wallet_series_cents"]), 2)
         self.assertEqual(len(row["shops_open_series"]), 2)
         self.assertEqual(row["shops_open_series"][-1], row["shops_open"])
+
+    def test_phase4_series_and_charts(self) -> None:
+        daily = [
+            {
+                "day": 1,
+                "economy": {"tax_income": 10.0, "utility_income": 2.0, "treasury": 1000},
+                "residents": {
+                    "bills_paid_cents": 600,
+                    "arrears_cents": 0,
+                    "in_arrears": 0,
+                },
+                "businesses": {
+                    "shops": {
+                        "fold-post": {
+                            "open": True,
+                            "price_cents": 500,
+                            "available": 1,
+                            "balance_cents": 50000,
+                            "sold_yesterday": 0,
+                        }
+                    },
+                    "bills_paid_cents": 200,
+                    "arrears_cents": 0,
+                },
+            },
+            {
+                "day": 2,
+                "economy": {"treasury": 1010},
+                "residents": {"count": 120},
+                "businesses": {"shops": {}},
+            },
+        ]
+        taxes = _series_taxes_and_bills(daily)
+        self.assertEqual(taxes["tax income ($)"][0], 10.0)
+        self.assertEqual(taxes["bills paid ($)"][0], 8.0)
+        self.assertIsNone(taxes["tax income ($)"][1])
+        self.assertIsNone(taxes["bills paid ($)"][1])
+        arrears = _series_arrears(daily)
+        self.assertEqual(arrears["residents in arrears"][0], 0.0)
+        self.assertIsNone(arrears["residents in arrears"][1])
+        html = render_html(
+            {"seed": 1, "days": 2, "systems": [], "daily": daily, "events_by_kind": {}}
+        )
+        self.assertIn("Taxes and bills", html)
+        self.assertIn("Arrears", html)
+        # Nested shops still chart.
+        self.assertIn("fold-post", html)
+
 
 
 if __name__ == "__main__":
