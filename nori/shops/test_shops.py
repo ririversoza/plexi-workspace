@@ -11,7 +11,12 @@ from nori.shops import (
     START_BALANCE_CENTS,
     WAGE_BASE_CENTS,
     WAGE_REVENUE_SHARE_PCT,
+    PRICE_CEIL_PCT_OF_BASE,
+    PRICE_FLOOR_PCT_OF_BASE,
+    PRICE_WEEK_DAYS,
     System,
+    next_price_cents,
+    price_bounds_cents,
     wage_per_staff,
 )
 
@@ -446,6 +451,150 @@ class MissingPeersTests(unittest.TestCase):
         self.assertFalse(town.state["businesses"]["shops"]["matcha-mile"]["open"])
         self.assertEqual(town.state["businesses"]["wages_paid"], {})
         self.assertFalse(any(e["kind"] == "wages_short" for e in town.events))
+
+
+class WeeklyPricingTests(unittest.TestCase):
+    def test_price_bounds_helper(self):
+        for shop_id in SHOP_IDS:
+            lo, hi = price_bounds_cents(shop_id)
+            base = SHOP_PARAMS[shop_id]["price_cents"]
+            unit = SHOP_PARAMS[shop_id]["unit_cost_cents"]
+            self.assertGreaterEqual(lo, (base * PRICE_FLOOR_PCT_OF_BASE) // 100)
+            self.assertGreaterEqual(lo, (unit * 115) // 100)
+            self.assertEqual(hi, (base * PRICE_CEIL_PCT_OF_BASE) // 100)
+            self.assertLessEqual(lo, hi)
+
+    def test_next_price_bump_cut_and_clamp(self):
+        shop_id = "one-mug-tea"
+        base = SHOP_PARAMS[shop_id]["price_cents"]
+        # Sold out most days → bump
+        bumped, reason = next_price_cents(
+            shop_id, base, [(150, 150), (150, 150), (10, 150)]
+        )
+        self.assertEqual(reason, "bump")
+        self.assertEqual(bumped, base + (base * 5) // 100)
+        # Low fill → cut
+        cut, reason = next_price_cents(
+            shop_id, base, [(10, 150), (10, 150), (10, 150)]
+        )
+        self.assertEqual(reason, "cut")
+        self.assertEqual(cut, base - (base * 5) // 100)
+        # Clamp to ceiling
+        lo, hi = price_bounds_cents(shop_id)
+        at_hi, _ = next_price_cents(shop_id, hi, [(150, 150)] * 5)
+        self.assertEqual(at_hi, hi)
+        at_lo, _ = next_price_cents(shop_id, lo, [(0, 150)] * 5)
+        self.assertEqual(at_lo, lo)
+
+    def test_weekly_adjust_emits_price_change_and_stays_in_bounds(self):
+        town = FakeTown()
+        system = System()
+        system.setup(town)
+        _seed_residents(town, purchases={}, spent={}, staff_pairs=[])
+        town.state["weather"] = {"condition": "sun", "temp_c": 20.0, "season": "spring"}
+        # Force a sell-out week for one-mug-tea via synthetic week stats.
+        cap = SHOP_PARAMS["one-mug-tea"]["capacity"]
+        system._week_stats["one-mug-tea"] = [(cap, cap)] * 6
+        system._prev_available = {s: SHOP_PARAMS[s]["capacity"] for s in SHOP_IDS}
+        # Days 1–6 open normally; day 7 triggers pricing.
+        for day in range(1, PRICE_WEEK_DAYS + 1):
+            town.day = day
+            # Keep prev_available high so open-day logs accumulate for other shops too.
+            system._prev_available = {
+                s: SHOP_PARAMS[s]["capacity"] for s in SHOP_IDS
+            }
+            if day < PRICE_WEEK_DAYS:
+                system._week_stats["one-mug-tea"] = [(cap, cap)] * day
+            system.tick(town)
+        tea = town.state["businesses"]["shops"]["one-mug-tea"]
+        lo, hi = price_bounds_cents("one-mug-tea")
+        self.assertGreaterEqual(tea["price_cents"], lo)
+        self.assertLessEqual(tea["price_cents"], hi)
+        changes = [e for e in town.events if e["kind"] == "price_change"]
+        tea_changes = [e for e in changes if e["shop_id"] == "one-mug-tea"]
+        self.assertTrue(tea_changes)
+        self.assertEqual(tea_changes[0]["reason"], "bump")
+
+    def test_prices_always_within_bounds_over_90_days(self):
+        _, snapshots, _, town = run_businesses(
+            seed=42, days=90, with_weather=True, with_residents=True
+        )
+        for day, snap in enumerate(snapshots, start=1):
+            # snapshots don't store prices; re-check final + scan events
+            pass
+        for shop_id, shop in town.state["businesses"]["shops"].items():
+            lo, hi = price_bounds_cents(shop_id)
+            self.assertGreaterEqual(shop["price_cents"], lo, msg=shop_id)
+            self.assertLessEqual(shop["price_cents"], hi, msg=shop_id)
+        for event in town.events:
+            if event["kind"] != "price_change":
+                continue
+            lo, hi = price_bounds_cents(event["shop_id"])
+            self.assertGreaterEqual(event["new_price_cents"], lo)
+            self.assertLessEqual(event["new_price_cents"], hi)
+
+    def test_tick_makes_zero_rng_draws(self):
+        town = FakeTown(seed=42)
+        system = System()
+        system.setup(town)
+        _seed_residents(town, staff_pairs=[])
+        town.state["weather"] = {"condition": "sun", "temp_c": 18.0, "season": "spring"}
+        draws = {"n": 0}
+        real_random = town.rng.random
+
+        def counted_random():
+            draws["n"] += 1
+            return real_random()
+
+        town.rng.random = counted_random
+        # Also wrap common Random methods businesses might call.
+        for name in ("randint", "randrange", "choice", "choices", "uniform", "gauss"):
+            if not hasattr(town.rng, name):
+                continue
+            orig = getattr(town.rng, name)
+
+            def wrapper(*args, _orig=orig, **kwargs):
+                draws["n"] += 1
+                return _orig(*args, **kwargs)
+
+            setattr(town.rng, name, wrapper)
+
+        for day in range(1, 15):
+            town.day = day
+            before = draws["n"]
+            system.tick(town)
+            self.assertEqual(
+                draws["n"], before, msg=f"rng draws on day {day}"
+            )
+
+    def test_pricing_deterministic_same_seed(self):
+        def prices(seed):
+            town = FakeTown(seed=seed)
+            system = System()
+            system.setup(town)
+            _seed_residents(town)
+            for day in range(1, 91):
+                town.day = day
+                town.state["weather"] = {
+                    "condition": "sun",
+                    "temp_c": 20.0,
+                    "season": "summer",
+                }
+                system.tick(town)
+                # identical daily purchases so sell-through is deterministic
+                units = 20
+                price = town.state["businesses"]["shops"]["one-mug-tea"]["price_cents"]
+                town.state["residents"]["purchases"] = {"one-mug-tea": units}
+                town.state["residents"]["spent_cents"] = {"one-mug-tea": units * price}
+                town._current_system = "economy"
+                town.emit("daily")
+                town._current_system = "businesses"
+            return {
+                sid: town.state["businesses"]["shops"][sid]["price_cents"]
+                for sid in SHOP_IDS
+            }
+
+        self.assertEqual(prices(42), prices(42))
 
 
 if __name__ == "__main__":

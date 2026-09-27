@@ -72,6 +72,15 @@ START_BALANCE_CENTS = 50_000  # $500.00 per shop
 WAGE_BASE_CENTS = 500         # $5.00 per staffer when the shop is open
 WAGE_REVENUE_SHARE_PCT = 20   # 20% of revenue booked this morning, split among staff
 
+# Phase 3 weekly pricing (deterministic; zero town.rng draws).
+PRICE_WEEK_DAYS = 7           # adjust when town.day % 7 == 0
+PRICE_BUMP_PCT = 5            # sold out on most open days in the week
+PRICE_CUT_PCT = 5             # week fill rate under LOW_FILL_PCT
+LOW_FILL_PCT = 40             # sold / available across the week
+PRICE_FLOOR_PCT_OF_BASE = 80  # never below 80% of catalog base
+PRICE_CEIL_PCT_OF_BASE = 125  # never above 125% of catalog base
+MIN_MARGIN_PCT_OF_COST = 115  # never below 1.15× unit cost
+
 # Weather capacity factors when the shop stays open. Storm forces closed.
 WEATHER_AVAILABLE_FACTOR = {
     "sun": 1.0,
@@ -119,6 +128,66 @@ def wage_per_staff(staff_count: int, revenue_booked_cents: int) -> int:
     return WAGE_BASE_CENTS + pool // staff_count
 
 
+def price_bounds_cents(shop_id: str) -> tuple[int, int]:
+    """Inclusive (lo, hi) for ``price_cents`` from base and unit cost."""
+    params = SHOP_PARAMS[shop_id]
+    base = params["price_cents"]
+    unit = params["unit_cost_cents"]
+    lo = max(
+        (base * PRICE_FLOOR_PCT_OF_BASE) // 100,
+        (unit * MIN_MARGIN_PCT_OF_COST) // 100,
+    )
+    hi = (base * PRICE_CEIL_PCT_OF_BASE) // 100
+    if hi < lo:
+        hi = lo
+    return lo, hi
+
+
+def next_price_cents(
+    shop_id: str, current_price: int, week_stats: list[tuple[int, int]]
+) -> tuple[int, str]:
+    """Deterministic weekly price from open-day (sold, available) pairs.
+
+    Returns ``(new_price_cents, reason)`` where reason is
+    ``bump`` / ``cut`` / ``hold``.
+    """
+    lo, hi = price_bounds_cents(shop_id)
+    price = current_price if type(current_price) is int else SHOP_PARAMS[shop_id]["price_cents"]
+    if not week_stats:
+        return max(lo, min(hi, price)), "hold"
+
+    sold_out = 0
+    total_sold = 0
+    total_avail = 0
+    for sold, avail in week_stats:
+        sold_i = _nonneg_int(sold)
+        avail_i = _nonneg_int(avail)
+        if avail_i <= 0:
+            continue
+        total_sold += sold_i
+        total_avail += avail_i
+        if sold_i >= avail_i:
+            sold_out += 1
+    open_days = sum(1 for _, avail in week_stats if _nonneg_int(avail) > 0)
+    if open_days <= 0 or total_avail <= 0:
+        return max(lo, min(hi, price)), "hold"
+
+    reason = "hold"
+    new_price = price
+    # "Most days" sold out: strictly more than half of open days in the log.
+    if sold_out * 2 > open_days:
+        new_price = price + (price * PRICE_BUMP_PCT) // 100
+        reason = "bump"
+    elif (total_sold * 100) // total_avail < LOW_FILL_PCT:
+        new_price = price - (price * PRICE_CUT_PCT) // 100
+        reason = "cut"
+
+    new_price = max(lo, min(hi, new_price))
+    if new_price == price:
+        reason = "hold"
+    return new_price, reason
+
+
 class System:
     """Six storefronts with no-overdraft ledgers, wages, and one-day sales lag."""
 
@@ -132,6 +201,11 @@ class System:
         self._last_settled_day: int | None = None
         # Lifetime revenue credited from settlement (for conservation checks).
         self.revenue_booked_total_cents = 0
+        # Weekly pricing: open-day (sold, available) since last adjust; prior avail.
+        self._week_stats: dict[str, list[tuple[int, int]]] = {
+            shop_id: [] for shop_id in SHOP_IDS
+        }
+        self._prev_available: dict[str, int] = {shop_id: 0 for shop_id in SHOP_IDS}
 
     def setup(self, town) -> None:
         self._town = town
@@ -139,6 +213,8 @@ class System:
         self._pending_units = {shop_id: 0 for shop_id in SHOP_IDS}
         self._last_settled_day = None
         self.revenue_booked_total_cents = 0
+        self._week_stats = {shop_id: [] for shop_id in SHOP_IDS}
+        self._prev_available = {shop_id: 0 for shop_id in SHOP_IDS}
         shops = {}
         pending = {}
         for shop_id in SHOP_IDS:
@@ -214,6 +290,14 @@ class System:
         self._pending_from_day = None
         self._pending_units = {shop_id: 0 for shop_id in SHOP_IDS}
 
+        # Record yesterday's sell-through for the weekly pricing window.
+        if town.day > 1:
+            for shop_id in SHOP_IDS:
+                y_avail = _nonneg_int(self._prev_available.get(shop_id))
+                if y_avail > 0:
+                    sold = _nonneg_int(shops[shop_id]["sold_yesterday"])
+                    self._week_stats[shop_id].append((sold, y_avail))
+
         # --- 2. Staff lists from residents.jobs
         staff_by_shop: dict[str, list] = {shop_id: [] for shop_id in SHOP_IDS}
         for person in people:
@@ -263,6 +347,10 @@ class System:
         if condition == "storm":
             town.emit("shops_closed", reason="storm", open_count=0)
 
+        # --- 3b. Weekly price adjust (days 7, 14, …); open shops only; no RNG
+        if type(town.day) is int and town.day >= PRICE_WEEK_DAYS and town.day % PRICE_WEEK_DAYS == 0:
+            self._apply_weekly_prices(town, shops)
+
         # --- 4. Pay wages only on open days (base + share of booked revenue)
         wages_paid: dict[int, int] = {}
         for shop_id in SHOP_IDS:
@@ -289,12 +377,35 @@ class System:
 
         state["wages_paid"] = wages_paid
         state["open_count"] = open_count
+        self._prev_available = {
+            shop_id: _nonneg_int(shops[shop_id]["available"]) for shop_id in SHOP_IDS
+        }
         town.emit(
             "daily",
             open_count=open_count,
             condition=condition,
             wages_total=sum(wages_paid.values()),
         )
+
+    def _apply_weekly_prices(self, town, shops: dict) -> None:
+        """Bump/cut open-shop prices from this week's open-day sell-through."""
+        for shop_id in SHOP_IDS:
+            shop = shops[shop_id]
+            stats = list(self._week_stats.get(shop_id) or [])
+            self._week_stats[shop_id] = []
+            if shop.get("open") is not True:
+                continue
+            old_price = shop["price_cents"]
+            new_price, reason = next_price_cents(shop_id, old_price, stats)
+            if new_price != old_price:
+                shop["price_cents"] = new_price
+                town.emit(
+                    "price_change",
+                    shop_id=shop_id,
+                    old_price_cents=old_price,
+                    new_price_cents=new_price,
+                    reason=reason,
+                )
 
     def _batch_to_settle(
         self, town, state: dict, shops: dict, residents: dict
@@ -392,5 +503,14 @@ __all__ = [
     "WAGE_BASE_CENTS",
     "WAGE_REVENUE_SHARE_PCT",
     "wage_per_staff",
+    "price_bounds_cents",
+    "next_price_cents",
+    "PRICE_WEEK_DAYS",
+    "PRICE_BUMP_PCT",
+    "PRICE_CUT_PCT",
+    "LOW_FILL_PCT",
+    "PRICE_FLOOR_PCT_OF_BASE",
+    "PRICE_CEIL_PCT_OF_BASE",
+    "MIN_MARGIN_PCT_OF_COST",
     "WEATHER_AVAILABLE_FACTOR",
 ]
