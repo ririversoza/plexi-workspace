@@ -2,12 +2,14 @@
 
 Works with zero systems installed: still prints 90 daily lines and a final report.
 Phase 2 summaries cover residents, wallets, shops, and a shop leaderboard.
-Phase 3 adds a small argparse CLI and a multi-seed robustness table.
+Phase 3 adds a small argparse CLI, a multi-seed robustness table,
+and optional ``--export PATH`` for a compact JSON timeline.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import importlib
 import sys
 from pathlib import Path
@@ -38,7 +40,9 @@ __all__ = [
     "MAX_ZERO_STREAK",
     "MIN_SHOPS_OPEN",
     "build_parser",
+    "build_timeline",
     "cli",
+    "count_events_by_kind",
     "daily_summary",
     "evaluate_targets",
     "final_report",
@@ -54,6 +58,8 @@ __all__ = [
     "sales_today",
     "shop_leaderboard",
     "shops_with_balance",
+    "snapshot_day",
+    "write_timeline",
 ]
 
 
@@ -410,23 +416,106 @@ def run_seeds_report(
     return format_seeds_table(slim), slim
 
 
+_SHOP_EXPORT_FIELDS = (
+    "open",
+    "price_cents",
+    "available",
+    "balance_cents",
+    "sold_yesterday",
+)
+
+
+def snapshot_day(town: Town) -> Dict[str, Any]:
+    """Compact end-of-day snapshot for the timeline export (no RNG draws)."""
+    entry: Dict[str, Any] = {"day": town.day}
+
+    for key in ("weather", "economy", "traffic", "emergency"):
+        state = town.state.get(key)
+        if isinstance(state, dict):
+            entry[key] = dict(state)
+
+    businesses = town.state.get("businesses")
+    if isinstance(businesses, dict):
+        shops_out: Dict[str, Dict[str, Any]] = {}
+        shops = businesses.get("shops") or {}
+        if isinstance(shops, dict):
+            for shop_id, shop in shops.items():
+                if not isinstance(shop, dict):
+                    continue
+                shops_out[str(shop_id)] = {
+                    field: shop.get(field) for field in _SHOP_EXPORT_FIELDS
+                }
+        entry["businesses"] = shops_out
+
+    residents = town.state.get("residents")
+    if isinstance(residents, dict):
+        people = {
+            "count": residents.get("count"),
+            "employed": residents.get("employed"),
+            "avg_wallet_cents": residents.get("avg_wallet_cents"),
+        }
+        if "avg_mood" in residents:
+            people["avg_mood"] = residents.get("avg_mood")
+        if "mood_bands" in residents:
+            people["mood_bands"] = residents.get("mood_bands")
+        entry["residents"] = people
+
+    return entry
+
+
+def count_events_by_kind(town: Town) -> Dict[str, int]:
+    """Count emitted events by ``kind`` (compact; not the full event list)."""
+    counts: Dict[str, int] = {}
+    for event in town.events:
+        kind = str(event.get("kind", ""))
+        counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
+def build_timeline(
+    town: Town,
+    systems: List[Any],
+    daily: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Assemble the JSON timeline document."""
+    return {
+        "seed": town.seed,
+        "days": town.day,
+        "systems": [system.name for system in systems],
+        "daily": daily,
+        "events_by_kind": count_events_by_kind(town),
+    }
+
+
+def write_timeline(path: str, timeline: Dict[str, Any]) -> None:
+    """Write ``timeline`` JSON to the exact ``path`` (parents must exist)."""
+    target = Path(path)
+    target.write_text(json.dumps(timeline, indent=2, sort_keys=False) + "\n")
+
+
 def main(
     days: int = DEFAULT_DAYS,
     seed: int = DEFAULT_SEED,
     *,
     quiet: bool = False,
+    export_path: Optional[str] = None,
 ) -> Town:
-    """Run the town. Default (quiet=False) prints every daily line + final report."""
+    """Run the town. Default stdout unchanged; ``export_path`` adds a JSON file."""
     systems = load_systems()
     units_sold: Dict[str, int] = {}
+    daily: List[Dict[str, Any]] = []
 
     def on_day(town: Town) -> None:
         if not quiet:
             print(daily_summary(town))
         _accumulate_sales(town, units_sold)
+        if export_path is not None:
+            daily.append(snapshot_day(town))
 
     town = run_town(systems, days=days, seed=seed, on_day=on_day)
     print(final_report(town, systems, units_sold=units_sold or None))
+    if export_path is not None:
+        write_timeline(export_path, build_timeline(town, systems, daily))
     return town
 
 
@@ -483,6 +572,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="A-B",
         help="run each seed quietly and print a robustness table",
     )
+    parser.add_argument(
+        "--export",
+        metavar="PATH",
+        default=None,
+        help="write a compact JSON timeline to PATH (stdout unchanged)",
+    )
     return parser
 
 
@@ -498,7 +593,12 @@ def cli(argv: Optional[Sequence[str]] = None) -> Any:
         table, rows = run_seeds_report(args.seeds, days=args.days)
         print(table)
         return rows
-    return main(days=args.days, seed=args.seed, quiet=args.quiet)
+    return main(
+        days=args.days,
+        seed=args.seed,
+        quiet=args.quiet,
+        export_path=args.export,
+    )
 
 
 if __name__ == "__main__":

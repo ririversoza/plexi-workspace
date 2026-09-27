@@ -75,6 +75,7 @@ python3 taro/tinytown/run.py
 python3 -m taro.tinytown.run --seed 42 --days 90
 python3 -m taro.tinytown.run --quiet
 python3 -m taro.tinytown.run --seeds 1-20
+python3 -m taro.tinytown.run --export /tmp/town-timeline.json
 
 python3 -m unittest discover -s taro/tinytown -t .
 ```
@@ -87,7 +88,36 @@ python3 -m unittest discover -s taro/tinytown -t .
 | `--days N` | `90` | simulation length |
 | `--quiet` | off | final report only (no daily lines) |
 | `--seeds A-B` | off | quiet multi-seed robustness table |
+| `--export PATH` | off | write compact JSON timeline to PATH (stdout unchanged) |
 
 `--seeds` disables log file writes (`csv_path=None`), tracks max consecutive `$0` shop balances with a read-only feature (no extra `town.rng` draws), and prints one row per seed: seed, shops with balance > 0 on the last day, max `$0` streak, average wallet, treasury, PASS/FAIL against Phase 2 targets (≥5 shops solvent, max `$0` streak ≤3, avg wallet < $600), then `X of N seeds pass`.
 
 Scratch and run output belong in `$TMPDIR`, never in the repo.
+
+### `--export PATH` timeline schema
+
+Writes **one** JSON file to the exact `PATH` (and only when `--export` is given). No extra `town.rng` draws. Plain runs without the flag never write this file and keep the same stdout bytes.
+
+Top level:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `seed` | int | RNG seed used for the run |
+| `days` | int | final day index (= length of `daily`) |
+| `systems` | string[] | installed system names, in load order |
+| `daily` | object[] | one compact snapshot per day |
+| `events_by_kind` | object | `{kind: count}` over `town.events` (not the full list) |
+
+Each `daily[]` entry:
+
+| Field | When | Contents |
+|---|---|---|
+| `day` | always | int |
+| `weather` | if present | full compact weather state (`condition`, `temp_c`, `season`, …) |
+| `economy` | if present | full compact economy state |
+| `traffic` | if present | full compact traffic state |
+| `emergency` | if present | full compact emergency state |
+| `businesses` | if present | `{shop_id: {open, price_cents, available, balance_cents, sold_yesterday}}` |
+| `residents` | if present | `{count, employed, avg_wallet_cents}` plus `avg_mood` / `mood_bands` **only if** those keys exist on resident state |
+
+Intentionally omitted: per-resident `people` lists, shop staff lists, wages maps, and the full event log.
