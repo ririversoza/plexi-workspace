@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Quill, inkwell, and a name slip  name it like you mean it. -->
+  <ellipse cx="28" cy="56" rx="16" ry="4" fill="#2b2b33" opacity="0.18"/>
+  <ellipse cx="28" cy="52" rx="12" ry="5" fill="#3a3f4b" stroke="#2b2b33" stroke-width="2.5"/>
+  <ellipse cx="28" cy="48" rx="9" ry="3.5" fill="#1d1f25"/>
+  <ellipse cx="28" cy="48" rx="6" ry="2.2" fill="#5b4a7a"/>
+  <path d="M34 46c8-18 18-28 22-32 1 4-2 14-8 24-2 4-6 8-10 10z" fill="#e8e6df" stroke="#2b2b33" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M36 44c6-14 14-24 18-28" fill="none" stroke="#c4b5d4" stroke-width="2" stroke-linecap="round"/>
+  <path d="M38 30l4-3 2 3-4 2z" fill="#a78bfa"/>
+  <path d="M40 26l2-8" fill="none" stroke="#2b2b33" stroke-width="2" stroke-linecap="round"/>
+  <rect x="8" y="22" width="22" height="12" rx="2" fill="#f7f3ea" stroke="#2b2b33" stroke-width="2.5"/>
+  <path d="M12 28h14M12 32h9" fill="none" stroke="#5b4a7a" stroke-width="2" stroke-linecap="round"/>
+</svg>
