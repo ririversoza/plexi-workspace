@@ -6,6 +6,7 @@ A weekly newspaper for Tiny Town (Phase 3 in `juniper/TINYTOWN.md`).
 python3 -m sora.gazette             # week 13 (the last issue)
 python3 -m sora.gazette --week 4    # one issue, weeks 1-13
 python3 -m sora.gazette --all       # every issue
+python3 -m sora.gazette --html --out gazette.html   # HTML edition, every week
 ```
 
 It runs the town in-process through `taro.tinytown` (seed 42, 90 days) with every installed system. The log gets `csv_path=None`, and nothing is written to disk.
@@ -49,6 +50,14 @@ The first rule that fires wins:
 
 Rules 1 and 3 need the Phase 3 keys, so without them the headlines are exactly the Phase 2 ones. At seed 42 on today's main, the 13 issues cover project openings (park in week 4, bike lane in week 8), mood swings (weeks 9, 10 and 12), storm closures and best sellers. The bus never runs at seed 42, because congestion never goes above 0.6.
 
+## HTML edition
+
+`--html` renders a newspaper-style page instead of text: a masthead, a week index, and one section per week with a boxed headline, a shop table, and the same lines as the text issue. `--out PATH` writes it there (the only file the gazette ever writes); without `--out` it goes to stdout. It covers every week unless `--week N` is given. `--out` without `--html` is an error.
+
+Each week has up to two stat tiles, each with a small inline-SVG sparkline: **Mood** (`residents.avg_mood`) and **Prices** (the average shop `price_cents` as a % of each shop's first observed price). The line shows the run up to that week in muted ink and the week itself in the accent, on one scale for the whole run so weeks compare. The SVG `<title>` says the week's start and end values. A tile only appears when its keys are there, and missing days break the line rather than bridging it.
+
+The page is self-contained: inline CSS and SVG, no JavaScript, fonts or other external assets. It follows `prefers-color-scheme` for light and dark, and fits a phone (the shop table scrolls sideways if it must). All state text is HTML-escaped. The HTML reuses the text sections, so the text output is unchanged.
+
 ## Missing systems
 
 Every section falls back to "no reporter on this beat yet" when its system isn't installed or its state is malformed. With zero systems, every issue is a quiet week. If `taro.tinytown` itself is missing, the CLI prints one line and exits 0.
@@ -59,4 +68,4 @@ Every section falls back to "no reporter on this beat yet" when its system isn't
 python3 -m unittest discover -s sora/gazette -t .
 ```
 
-The tests cover a golden Phase 2 issue that must stay byte-identical, each Phase 3 section with its keys present and absent, the project-completion and mood-swing headlines, identical output across runs, all 13 issues printed, read-only behaviour (RNG state, events and final state unchanged), no files written (run inside a temporary directory), week bounds (full coverage, the short last week, out-of-range rejection), zero systems, weather only, malformed state, and each headline rule in priority order.
+The tests cover a golden Phase 2 issue that must stay byte-identical, each Phase 3 section with its keys present and absent, the project-completion and mood-swing headlines, identical output across runs, all 13 issues printed, read-only behaviour (RNG state, events and final state unchanged), no files written (run inside a temporary directory), week bounds (full coverage, the short last week, out-of-range rejection), zero systems, weather only, malformed state, each headline rule in priority order, and the HTML edition (self-contained page, one article per week, `--out` writes only that file, escaping, tiles present only with their keys, the price index, gaps in sparklines).
