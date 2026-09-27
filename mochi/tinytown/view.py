@@ -30,16 +30,6 @@ SHOP_IDS = (
     "fold-post",
     "daifuku-cart",
 )
-# Catalog base prices, copied from nori/shops/README.md (not imported). A shop's own
-# "base_price_cents", if Nori ever adds one to state, wins over this table.
-BASE_PRICE_CENTS = {
-    "one-mug-tea": 325,
-    "bench-and-bell": 6900,
-    "spoke-and-spanner": 7500,
-    "matcha-mile": 550,
-    "fold-post": 800,
-    "daifuku-cart": 375,
-}
 PRICE_UP = "↑"
 PRICE_DOWN = "↓"
 MOOD_BANDS = ("happy", "ok", "unhappy")
@@ -53,18 +43,17 @@ RULE_WIDTH = BOXES_PER_ROW * (BOX_INNER + 4) + (BOXES_PER_ROW - 1)
 # --- formatting helpers -----------------------------------------------------
 
 
-def is_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
-def cents(value):
-    """Integer cents -> "$1,234.56". Anything non-numeric -> "?"."""
-    return f"${value / 100:,.2f}" if is_number(value) else "?"
+is_number = history.is_number  # int or finite float, never bool
+cents = history.cents  # integer cents -> "$1,234.56", exact for any size
 
 
 def dollars(value):
-    """Float dollars (economy.treasury) -> "$1,234.56"."""
-    return f"${value:,.2f}" if is_number(value) else "?"
+    """Dollars (economy.treasury, a float) -> "$1,234.56"; ints are formatted exactly."""
+    if not is_number(value):
+        return "?"
+    if isinstance(value, int):
+        return cents(value * 100)
+    return f"{'-' if value < 0 else ''}${abs(value):,.2f}"
 
 
 def fit(text, width):
@@ -114,22 +103,26 @@ def units_sold(shop_id, shop, purchases):
     return shop.get("sold_yesterday", 0)
 
 
-def price_arrow(shop_id, shop):
-    """" ↑" / " ↓" when today's price is above / below base; "" when equal or unknown."""
+def price_arrow(shop, observed_base=None):
+    """" ↑" / " ↓" when today's price is above / below a *known* base price, else "".
+
+    The base is known only from data: the shop's own ``base_price_cents`` in state, or
+    ``observed_base``, the price this run saw on its first day. Nothing is guessed.
+    """
     price = shop.get("price_cents")
-    base = shop.get("base_price_cents", BASE_PRICE_CENTS.get(shop_id))
+    base = shop.get("base_price_cents", observed_base)
     if not (is_number(price) and is_number(base)) or price == base:
         return ""
     return f" {PRICE_UP}" if price > base else f" {PRICE_DOWN}"
 
 
-def shop_box(shop_id, shop, names, purchases):
+def shop_box(shop_id, shop, names, purchases, observed_base=None):
     """One storefront as a list of equal-width lines."""
     status = "OPEN" if shop.get("open") else "CLOSED"
     staff = [f"  {label}" if label else "" for label in staff_lines(shop.get("staff"), names)]
     body = [
         shop.get("name", shop_id),
-        f"{status:<8}{cents(shop.get('price_cents'))} each{price_arrow(shop_id, shop)}",
+        f"{status:<8}{cents(shop.get('price_cents'))} each{price_arrow(shop, observed_base)}",
         f"sold {units_sold(shop_id, shop, purchases)}",
         f"bal {cents(shop.get('balance_cents'))}",
     ] + staff
@@ -144,7 +137,14 @@ def ordered_shop_ids(shops):
     return known + extra
 
 
-def storefronts(state):
+def first_day_prices(state):
+    """{shop_id: price_cents} as a baseline for the price arrows (see ``run``)."""
+    shops = as_dict(as_dict(state.get("businesses")).get("shops"))
+    return {sid: shop.get("price_cents") for sid, shop in shops.items()
+            if isinstance(shop, dict) and is_number(shop.get("price_cents"))}
+
+
+def storefronts(state, base_prices=None):
     businesses = state.get("businesses")
     if not isinstance(businesses, dict):
         return [f"STOREFRONTS  {NOT_BUILT}"]
@@ -154,7 +154,9 @@ def storefronts(state):
     residents = state.get("residents")
     purchases = as_dict(residents.get("purchases")) if isinstance(residents, dict) else None
     names = resident_names(state)
-    boxes = [shop_box(sid, as_dict(shops[sid]), names, purchases) for sid in ordered_shop_ids(shops)]
+    base_prices = as_dict(base_prices)
+    boxes = [shop_box(sid, as_dict(shops[sid]), names, purchases, base_prices.get(sid))
+             for sid in ordered_shop_ids(shops)]
     lines = [f"STOREFRONTS  {businesses.get('open_count', '?')} open"]
     for start in range(0, len(boxes), BOXES_PER_ROW):
         row = boxes[start : start + BOXES_PER_ROW]
@@ -196,8 +198,9 @@ def mood_line(residents):
         return None
     avg = residents.get("avg_mood")
     avg_text = f"{avg}/100" if is_number(avg) else "n/a"
-    bands = as_dict(residents.get("mood_bands"))
-    order = [b for b in MOOD_BANDS if b in bands] + sorted(str(b) for b in bands if b not in MOOD_BANDS)
+    # Normalise keys once, so odd keys like {1: 2} can't miss on lookup.
+    bands = {str(band): count for band, count in as_dict(residents.get("mood_bands")).items()}
+    order = [b for b in MOOD_BANDS if b in bands] + sorted(b for b in bands if b not in MOOD_BANDS)
     bands_text = " | ".join(f"{band} {bands[band]}" for band in order) or "bands n/a"
     return f"  mood: avg {avg_text} | {bands_text}"
 
@@ -288,12 +291,16 @@ def ticker(state):
     return lines
 
 
-def render(state, day, days=DAYS):
-    """Draw the whole town for one day. ``state`` is ``town.state``; never raises on gaps."""
+def render(state, day, days=DAYS, base_prices=None):
+    """Draw the whole town for one day. ``state`` is ``town.state``; never raises on gaps.
+
+    ``base_prices`` ({shop_id: cents}) enables the price arrows; without it, only a shop's
+    own ``base_price_cents`` can.
+    """
     state = as_dict(state)
     title = f" Tiny Town | Day {day} / {days} "
     lines = [title.center(RULE_WIDTH, "="), weather_banner(state), ""]
-    lines += storefronts(state) + [""]
+    lines += storefronts(state, base_prices) + [""]
     lines += residents_panel(state) + [""]
     lines += ticker(state)
     lines.append("=" * RULE_WIDTH)
@@ -338,10 +345,15 @@ def run_engine(on_day, days=DAYS, seed=SEED):
 def run(show_day, days=DAYS, seed=SEED):
     """Run the town and return rendered frames: just ``show_day``, or every day if None."""
     frames = []
+    base_prices = None
 
     def on_day(town):
+        nonlocal base_prices
+        if base_prices is None:
+            # Weekly pricing first moves on day 7, so day 1's prices are the base.
+            base_prices = first_day_prices(town.state)
         if show_day is None or town.day == show_day:
-            frames.append(render(town.state, town.day, days))
+            frames.append(render(town.state, town.day, days, base_prices))
 
     run_engine(on_day, days, seed)
     return frames
