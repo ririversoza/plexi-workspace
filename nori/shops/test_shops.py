@@ -221,9 +221,13 @@ class BoundsTests(unittest.TestCase):
         self.assertEqual(wages.get(11), expected_wage)
         shop = town.state["businesses"]["shops"]["matcha-mile"]
         self.assertEqual(shop["staff"], [10, 11])
+        from nori.shops import COMMERCIAL_RENT_CENTS, LICENCE_UTILITIES_CENTS
+
         expected = (
             START_BALANCE_CENTS
             - SHOP_PARAMS["matcha-mile"]["overhead_cents"]
+            - COMMERCIAL_RENT_CENTS
+            - LICENCE_UTILITIES_CENTS
             - 2 * expected_wage
         )
         self.assertEqual(shop["balance_cents"], expected)
@@ -280,8 +284,30 @@ class BoundsTests(unittest.TestCase):
         system.tick(town)
         shop = town.state["businesses"]["shops"]["fold-post"]
         self.assertEqual(shop["sold_yesterday"], units)
-        expected = before + units * price - units * unit_cost - overhead
+        from nori.shops import (
+            COMMERCIAL_RENT_CENTS,
+            LICENCE_UTILITIES_CENTS,
+            sales_tax_cents,
+        )
+
+        revenue = units * price
+        tax = sales_tax_cents(revenue)
+        expected = (
+            before
+            + revenue
+            - tax
+            - overhead
+            - COMMERCIAL_RENT_CENTS
+            - LICENCE_UTILITIES_CENTS
+            - units * unit_cost
+        )
         self.assertEqual(shop["balance_cents"], expected)
+        self.assertEqual(town.state["businesses"]["taxes_paid_cents"], tax)
+        # All six shops open → each pays rent + licence.
+        self.assertEqual(
+            town.state["businesses"]["bills_paid_cents"],
+            6 * (COMMERCIAL_RENT_CENTS + LICENCE_UTILITIES_CENTS),
+        )
 
     def test_pending_captures_day90_sales_after_later_emit(self):
         town = FakeTown()
@@ -638,6 +664,99 @@ class WeeklyPricingTests(unittest.TestCase):
             }
 
         self.assertEqual(prices(42), prices(42))
+
+
+class Phase4TaxBillTests(unittest.TestCase):
+    """Sales tax, rent, licence, arrears — no RNG, no overdraft."""
+
+    def test_setup_exposes_tax_bill_keys(self):
+        town = FakeTown()
+        System().setup(town)
+        state = town.state["businesses"]
+        self.assertEqual(state["taxes_paid_cents"], 0)
+        self.assertEqual(state["bills_paid_cents"], 0)
+        self.assertEqual(state["arrears_cents"], 0)
+        for shop in state["shops"].values():
+            self.assertEqual(shop["tax_arrears_cents"], 0)
+            self.assertEqual(shop["bill_arrears_cents"], 0)
+
+    def test_sales_tax_helper(self):
+        from nori.shops import sales_tax_cents
+
+        self.assertEqual(sales_tax_cents(1000), 50)
+        self.assertEqual(sales_tax_cents(0), 0)
+        self.assertEqual(sales_tax_cents(-5), 0)
+
+    def test_open_day_pays_rent_and_licence(self):
+        from nori.shops import COMMERCIAL_RENT_CENTS, LICENCE_UTILITIES_CENTS
+
+        town = FakeTown()
+        system = System()
+        system.setup(town)
+        town.state["weather"] = {"condition": "sun", "temp_c": 20.0, "season": "summer"}
+        town.day = 1
+        system.tick(town)
+        state = town.state["businesses"]
+        # Six open shops × ($8 rent + $2 licence)
+        self.assertEqual(
+            state["bills_paid_cents"],
+            6 * (COMMERCIAL_RENT_CENTS + LICENCE_UTILITIES_CENTS),
+        )
+        self.assertEqual(state["taxes_paid_cents"], 0)
+        self.assertEqual(state["arrears_cents"], 0)
+
+    def test_storm_skips_rent_and_licence(self):
+        town = FakeTown()
+        system = System()
+        system.setup(town)
+        town.state["weather"] = {"condition": "storm", "temp_c": 5.0, "season": "spring"}
+        town.day = 1
+        system.tick(town)
+        state = town.state["businesses"]
+        self.assertEqual(state["open_count"], 0)
+        self.assertEqual(state["bills_paid_cents"], 0)
+        self.assertEqual(state["arrears_cents"], 0)
+
+    def test_missed_shop_bill_goes_to_arrears_then_clears(self):
+        from nori.shops import COMMERCIAL_RENT_CENTS, LICENCE_UTILITIES_CENTS
+
+        town = FakeTown()
+        system = System()
+        system.setup(town)
+        shop = town.state["businesses"]["shops"]["fold-post"]
+        # Exactly overhead: can open, but rent+licence unpaid → arrears.
+        shop["balance_cents"] = SHOP_PARAMS["fold-post"]["overhead_cents"]
+        town.state["weather"] = {"condition": "sun", "temp_c": 20.0, "season": "summer"}
+        town.day = 1
+        system.tick(town)
+        shop = town.state["businesses"]["shops"]["fold-post"]
+        self.assertTrue(shop["open"])
+        missed = [e for e in town.events if e["kind"] == "missed_shop_bill"]
+        self.assertTrue(missed)
+        due = COMMERCIAL_RENT_CENTS + LICENCE_UTILITIES_CENTS
+        self.assertEqual(shop["bill_arrears_cents"], due)
+        self.assertEqual(town.state["businesses"]["arrears_cents"], due)
+        self.assertEqual(shop["balance_cents"], 0)
+
+        # Next day with cash: arrears paid first.
+        shop["balance_cents"] = due + SHOP_PARAMS["fold-post"]["overhead_cents"] + due
+        town.day = 2
+        system.tick(town)
+        shop = town.state["businesses"]["shops"]["fold-post"]
+        self.assertEqual(shop["bill_arrears_cents"], 0)
+        self.assertEqual(shop["tax_arrears_cents"], 0)
+        self.assertEqual(town.state["businesses"]["arrears_cents"], 0)
+
+    def test_balances_never_negative_with_taxes(self):
+        _, snapshots, _, town = run_businesses(
+            seed=42, days=90, with_weather=True, with_residents=True
+        )
+        for day, snap in enumerate(snapshots, start=1):
+            for shop_id, bal in snap["balances"].items():
+                self.assertGreaterEqual(bal, 0, msg=f"day {day} {shop_id}")
+        self.assertGreaterEqual(town.state["businesses"]["arrears_cents"], 0)
+        self.assertGreaterEqual(town.state["businesses"]["taxes_paid_cents"], 0)
+        self.assertGreaterEqual(town.state["businesses"]["bills_paid_cents"], 0)
 
 
 if __name__ == "__main__":
