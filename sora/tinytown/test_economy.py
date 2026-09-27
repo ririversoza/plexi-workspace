@@ -121,6 +121,74 @@ class EconomyV2Test(unittest.TestCase):
         self.assertIn("budget_shortfall", [e["kind"] for e in town.events])
 
 
+class TaxesTest(unittest.TestCase):
+    """Phase 4: the treasury collects what residents and businesses actually paid today."""
+
+    PEOPLE = {"count": 120, "employed": 102}
+
+    def day_one(self, residents=None, businesses=None):
+        others = {"residents": {**self.PEOPLE, **(residents or {})}, "businesses": {"open_count": 4, **(businesses or {})}}
+        return final(days=1, others=lambda day: others).state["economy"]
+
+    def test_fallback_is_the_old_conjured_formula(self):
+        eco = self.day_one()
+        self.assertEqual((eco["tax_income"], eco["utility_income"]), (102 * 1.0 + 4 * 5.0, 0.0))
+        self.assertEqual(eco["treasury"], 1000.0 + 122.0 - 120.0 - 2.0)  # income, upkeep, park instalment
+
+    def test_real_taxes_and_bills_replace_the_formula(self):
+        eco = self.day_one(
+            residents={"taxes_paid_cents": 1234, "bills_paid_cents": 18000},
+            businesses={"taxes_paid_cents": {"fold-post": 105, "matcha-mile": 0}, "bills_paid_cents": 800},
+        )
+        self.assertEqual((eco["tax_income"], eco["utility_income"]), (13.39, 188.0))
+        self.assertEqual(eco["treasury"], 1061.39)  # 1000 + 201.39 - 120 upkeep - 20 park instalment
+
+    def test_each_source_falls_back_on_its_own(self):
+        residents_only = self.day_one(residents={"taxes_paid_cents": 500, "bills_paid_cents": 0})
+        self.assertEqual((residents_only["tax_income"], residents_only["utility_income"]), (5.0 + 4 * 5.0, 0.0))
+        shops_only = self.day_one(businesses={"taxes_paid_cents": 0, "bills_paid_cents": 200})
+        self.assertEqual((shops_only["tax_income"], shops_only["utility_income"]), (102.0, 2.0))
+
+    def test_nothing_paid_means_no_income(self):
+        zero = {"taxes_paid_cents": 0, "bills_paid_cents": 0}
+        eco = self.day_one(residents=zero, businesses=zero)
+        self.assertEqual((eco["tax_income"], eco["utility_income"]), (0.0, 0.0))
+        self.assertEqual(eco["treasury"], 880.0)  # only upkeep left; no project below the reserve
+
+    def test_malformed_amounts_count_as_zero_never_conjured(self):
+        for bad in (-500, True, "500", 5.5, None, [500], {"a": -1, "b": "x"}):
+            eco = self.day_one(residents={"taxes_paid_cents": bad}, businesses={"bills_paid_cents": bad})
+            self.assertEqual((eco["tax_income"], eco["utility_income"]), (0.0, 0.0), bad)
+
+    def test_cents_are_summed_before_converting(self):
+        eco = self.day_one(residents={"taxes_paid_cents": 10, "bills_paid_cents": 1}, businesses={"taxes_paid_cents": 20})
+        self.assertEqual((eco["tax_income"], eco["utility_income"]), (0.3, 0.01))
+
+    def test_treasury_gets_exactly_what_was_paid(self):
+        """Conservation: over 90 days the treasury moves by what was paid minus upkeep, to the cent."""
+        paid = lambda day: {
+            "residents": {**self.PEOPLE, "taxes_paid_cents": 1000 + day, "bills_paid_cents": 18000 - day},
+            "businesses": {"open_count": 6, "taxes_paid_cents": {"a": 37 * day}, "bills_paid_cents": 1200},
+        }
+        with mock.patch("sora.tinytown.PROJECTS", ()):
+            *_, town = run(others=paid)
+        received = sum(1000 + d + 18000 - d + 37 * d + 1200 for d in range(1, 91))
+        self.assertEqual(round(town.state["economy"]["treasury"] * 100), 100_000 + received - 90 * 120 * 100)
+
+    def test_no_rng_draws_and_no_overdraft_with_real_keys(self):
+        zero = {"taxes_paid_cents": 0, "bills_paid_cents": 0}
+        broke = lambda day: {"residents": {"count": 120, "employed": 0, **zero}, "businesses": {"open_count": 0, **zero}}
+        for town in run(others=broke):
+            self.assertGreaterEqual(town.state["economy"]["treasury"], 0)
+        self.assertEqual(town.rng.random(), random.Random(42).random())
+        self.assertIn("budget_shortfall", [e["kind"] for e in town.events])
+
+    def test_setup_exposes_the_new_keys(self):
+        town = FakeTown()
+        System().setup(town)
+        self.assertEqual((town.state["economy"]["tax_income"], town.state["economy"]["utility_income"]), (0.0, 0.0))
+
+
 class PublicWorksTest(unittest.TestCase):
     SUN = staticmethod(lambda day: "sun")
 

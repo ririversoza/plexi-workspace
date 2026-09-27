@@ -9,9 +9,14 @@ SHOPS = 20
 
 DAILY_ARRIVALS = (-2, 3)        # inclusive range of daily population change
 EMPLOYMENT_RATE = (0.85, 0.95)  # daily employment rate is drawn from this range
-TAX_PER_WORKER = 1.0
-TAX_PER_SHOP = 5.0
+TAX_PER_WORKER = 1.0  # fallback only: conjured income when residents don't report taxes
+TAX_PER_SHOP = 5.0    # fallback only: the same for businesses
 UPKEEP_PER_RESIDENT = 1.0
+
+# Phase 4: today's int cents paid to the town (arrears paid today included), reported by
+# residents and businesses. bills_paid_cents is the treasury-bound share only (utilities,
+# licence); rent is reported separately and leaves town.
+PAID_KEYS = ("taxes_paid_cents", "bills_paid_cents")
 
 DEFAULT_CONDITION = "sun"
 
@@ -25,6 +30,40 @@ def _read(town, system, key):
     """An int from another system's state, or None if it isn't there."""
     value = (town.state.get(system) or {}).get(key)
     return value if isinstance(value, int) else None
+
+
+def _cents(value):
+    """Cents from an int, or a dict of them (e.g. per shop). Anything else, or negative, is 0."""
+    if isinstance(value, dict):
+        return sum(_cents(v) for v in value.values())
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def _paid(town, system):
+    """(tax cents, bill cents) that ``system`` paid the town today; None if it doesn't report them."""
+    state = town.state.get(system)
+    if not isinstance(state, dict) or not any(key in state for key in PAID_KEYS):
+        return None
+    return _cents(state.get("taxes_paid_cents")), _cents(state.get("bills_paid_cents"))
+
+
+def _income(town, employed, shops_open):
+    """(tax_income, utility_income) in dollars, rounded to the cent.
+
+    Each source that reports what it paid counts exactly that, so no money is created. A source
+    that doesn't falls back to the old conjured formula for its share.
+    """
+    tax_cents = bill_cents = 0
+    conjured = 0.0
+    for system, fallback in (("residents", employed * TAX_PER_WORKER), ("businesses", shops_open * TAX_PER_SHOP)):
+        paid = _paid(town, system)
+        if paid is None:
+            conjured += fallback
+        else:
+            tax_cents += paid[0]
+            bill_cents += paid[1]
+    # Sum whole cents first and divide once, so 10 + 20 cents is 0.3, not 0.30000000000000004.
+    return round(tax_cents / 100 + conjured, 2), round(bill_cents / 100, 2)
 
 
 def _public_works(town, prev, treasury):
@@ -61,6 +100,8 @@ class System:
             "shops_open": SHOPS,
             "project": None,
             "projects_completed": [],
+            "tax_income": 0.0,
+            "utility_income": 0.0,
         }
 
     def tick(self, town):
@@ -84,8 +125,8 @@ class System:
             if is_storm:
                 town.emit("shops_closed", reason="storm")
 
-        income = employed * TAX_PER_WORKER + shops_open * TAX_PER_SHOP
-        available = prev["treasury"] + income
+        tax_income, utility_income = _income(town, employed, shops_open)
+        available = prev["treasury"] + tax_income + utility_income
         upkeep = population * UPKEEP_PER_RESIDENT
         spent = min(upkeep, available)  # no overdraft: never spend money we don't have
         if spent < upkeep:
@@ -100,4 +141,6 @@ class System:
             "shops_open": shops_open,
             "project": project,
             "projects_completed": completed,
+            "tax_income": tax_income,
+            "utility_income": utility_income,
         }
