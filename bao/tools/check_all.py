@@ -12,22 +12,22 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MARKER = "OFFICE_TEST_RESULT="
+OUTPUT_TAIL_CHARS = 4000
 WORKER = r'''
 import json, pathlib, sys, unittest
-root, folder = map(pathlib.Path, sys.argv[1:3])
+root, folder, result_path = map(pathlib.Path, sys.argv[1:4])
 sys.path.insert(0, str(root))
 parts = folder.relative_to(root).parts
 # Direct agent tests are legacy standalone suites (e.g. bao/test_roster.py).
 package = len(parts) > 1 and all((root.joinpath(*parts[:i]) / "__init__.py").is_file()
               for i in range(1, len(parts) + 1))
 if not package:
-    sys.path.insert(0, str(folder))
+    sys.path.append(str(folder))
 names = [(".".join(parts) + "." if package else "") + pathlib.Path(name).stem
-         for name in sys.argv[3:]]
+         for name in sys.argv[4:]]
 suite = unittest.defaultTestLoader.loadTestsFromNames(names)
 result = unittest.TextTestRunner(verbosity=1).run(suite)
-print("\nOFFICE_TEST_RESULT=" + json.dumps({"tests": result.testsRun,
+result_path.write_text(json.dumps({"tests": result.testsRun,
       "skipped": len(result.skipped),
       "executed_skips": sum(isinstance(test, unittest.TestCase) for test, reason in result.skipped),
       "success": result.wasSuccessful()}))
@@ -61,24 +61,33 @@ def discover_suites(root, only=None):
     return suites
 
 
-def run_suite(root, suite):
+def output_tail(value):
+    """TimeoutExpired may contain bytes even when subprocess text mode is enabled."""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    return (value or "")[-OUTPUT_TAIL_CHARS:]
+
+
+def run_suite(root, suite, timeout=120):
     started = time.monotonic()
     # Redirect both cwd writes and nested tempfile users into a disposable tree.
     with tempfile.TemporaryDirectory(prefix="plexi-check-", dir=os.environ.get("TMPDIR")) as scratch:
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONPATH=str(root),
                    TMPDIR=scratch, TMP=scratch, TEMP=scratch)
+        result_path = Path(scratch) / "result.json"
         try:
             child = subprocess.run(
-                [sys.executable, "-c", WORKER, str(root), str(suite.path), *suite.tests],
-                cwd=scratch, env=env, capture_output=True, text=True, timeout=120,
+                [sys.executable, "-c", WORKER, str(root), str(suite.path), str(result_path), *suite.tests],
+                cwd=scratch, env=env, capture_output=True, text=True, timeout=timeout,
             )
-        except subprocess.TimeoutExpired:
-            return "?", "FAIL", time.monotonic() - started, "Timed out after 120 seconds"
-        records = [line[len(MARKER):] for line in child.stdout.splitlines()
-                   if line.startswith(MARKER)]
+        except subprocess.TimeoutExpired as error:
+            details = (f"Timed out after {timeout} seconds\n"
+                       f"stdout tail:\n{output_tail(error.stdout)}\n"
+                       f"stderr tail:\n{output_tail(error.stderr)}")
+            return "?", "FAIL", time.monotonic() - started, details
         details = child.stdout + child.stderr
         try:
-            result = json.loads(records[-1])
+            result = json.loads(result_path.read_text())
             tests, skipped = result["tests"], result["skipped"]
             success = child.returncode == 0 and result["success"]
             if not tests and not skipped:
@@ -87,8 +96,9 @@ def run_suite(root, suite):
             status = "FAIL" if not success else ("SKIP" if skipped and result["executed_skips"] == tests else "PASS")
             if skipped:
                 status += f" ({skipped} skipped)"
-        except (IndexError, KeyError, ValueError, TypeError):
+        except (OSError, KeyError, ValueError, TypeError):
             tests, status = "?", "FAIL"
+            details += "\nMissing or invalid worker result file.\n"
         return tests, status, time.monotonic() - started, details
 
 
