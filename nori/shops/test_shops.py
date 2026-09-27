@@ -8,9 +8,11 @@ import unittest
 from nori.shops import (
     SHOP_IDS,
     SHOP_PARAMS,
-    STAFF_WAGE_CENTS,
     START_BALANCE_CENTS,
+    WAGE_BASE_CENTS,
+    WAGE_REVENUE_SHARE_PCT,
     System,
+    wage_per_staff,
 )
 
 
@@ -171,7 +173,6 @@ class BoundsTests(unittest.TestCase):
                 self.assertLessEqual(avail, SHOP_PARAMS[shop_id]["capacity"])
             for cents in snap["wages_paid"].values():
                 self.assertGreaterEqual(cents, 0)
-                self.assertLessEqual(cents, STAFF_WAGE_CENTS)
 
     def test_storm_closes_every_shop(self):
         _, snapshots, _, town = run_businesses(
@@ -208,16 +209,51 @@ class BoundsTests(unittest.TestCase):
         town.day = 1
         system.tick(town)
         wages = town.state["businesses"]["wages_paid"]
-        self.assertEqual(wages.get(10), STAFF_WAGE_CENTS)
-        self.assertEqual(wages.get(11), STAFF_WAGE_CENTS)
+        # Day 1: no booked revenue yet → base only, split N/A (each gets base).
+        expected_wage = wage_per_staff(2, 0)
+        self.assertEqual(expected_wage, WAGE_BASE_CENTS)
+        self.assertEqual(wages.get(10), expected_wage)
+        self.assertEqual(wages.get(11), expected_wage)
         shop = town.state["businesses"]["shops"]["matcha-mile"]
         self.assertEqual(shop["staff"], [10, 11])
         expected = (
             START_BALANCE_CENTS
             - SHOP_PARAMS["matcha-mile"]["overhead_cents"]
-            - 2 * STAFF_WAGE_CENTS
+            - 2 * expected_wage
         )
         self.assertEqual(shop["balance_cents"], expected)
+
+    def test_no_wages_when_storm_closed(self):
+        town = FakeTown()
+        system = System()
+        system.setup(town)
+        _seed_residents(town, staff_pairs=[("one-mug-tea", 1), ("one-mug-tea", 2)])
+        town.state["weather"] = {"condition": "storm", "temp_c": 5.0, "season": "spring"}
+        town.day = 1
+        system.tick(town)
+        self.assertEqual(town.state["businesses"]["wages_paid"], {})
+        self.assertEqual(town.state["businesses"]["open_count"], 0)
+
+    def test_wage_includes_revenue_share(self):
+        town = FakeTown()
+        system = System()
+        system.setup(town)
+        units = 10
+        price = SHOP_PARAMS["one-mug-tea"]["price_cents"]
+        revenue = units * price
+        _seed_residents(
+            town,
+            purchases={"one-mug-tea": units},
+            spent={"one-mug-tea": revenue},
+            staff_pairs=[("one-mug-tea", 1)],
+        )
+        town.state["weather"] = {"condition": "sun", "temp_c": 18.0, "season": "spring"}
+        town.day = 2
+        system.tick(town)
+        expected = wage_per_staff(1, revenue)
+        share = (revenue * WAGE_REVENUE_SHARE_PCT) // 100
+        self.assertEqual(expected, WAGE_BASE_CENTS + share)
+        self.assertEqual(town.state["businesses"]["wages_paid"].get(1), expected)
 
     def test_yesterday_purchases_booked_as_revenue(self):
         town = FakeTown()
@@ -285,24 +321,40 @@ class MissingPeersTests(unittest.TestCase):
         system.tick(town)
         self.assertEqual(town.state["businesses"]["open_count"], 6)
 
-    def test_wages_short_when_broke(self):
+    def test_wages_short_when_open_but_broke(self):
         town = FakeTown()
         system = System()
         system.setup(town)
-        shop = town.state["businesses"]["shops"]["matcha-mile"]
-        shop["balance_cents"] = 100
-        _seed_residents(
-            town, staff_pairs=[("matcha-mile", 1), ("matcha-mile", 2)]
-        )
+        shop = town.state["businesses"]["shops"]["fold-post"]
+        # Enough for overhead ($15) but not full wages after opening.
+        shop["balance_cents"] = SHOP_PARAMS["fold-post"]["overhead_cents"] + 100
+        _seed_residents(town, staff_pairs=[("fold-post", 1), ("fold-post", 2)])
         town.state["weather"] = {"condition": "sun", "temp_c": 20.0, "season": "summer"}
         town.day = 1
         system.tick(town)
+        self.assertTrue(town.state["businesses"]["shops"]["fold-post"]["open"])
         short = [e for e in town.events if e["kind"] == "wages_short"]
         self.assertTrue(short)
         for bal in (
             town.state["businesses"]["shops"][s]["balance_cents"] for s in SHOP_IDS
         ):
             self.assertGreaterEqual(bal, 0)
+
+    def test_closed_for_overhead_pays_no_wages(self):
+        town = FakeTown()
+        system = System()
+        system.setup(town)
+        shop = town.state["businesses"]["shops"]["matcha-mile"]
+        shop["balance_cents"] = 100  # less than overhead → closed, no wages
+        _seed_residents(
+            town, staff_pairs=[("matcha-mile", 1), ("matcha-mile", 2)]
+        )
+        town.state["weather"] = {"condition": "sun", "temp_c": 20.0, "season": "summer"}
+        town.day = 1
+        system.tick(town)
+        self.assertFalse(town.state["businesses"]["shops"]["matcha-mile"]["open"])
+        self.assertEqual(town.state["businesses"]["wages_paid"], {})
+        self.assertFalse(any(e["kind"] == "wages_short" for e in town.events))
 
 
 if __name__ == "__main__":

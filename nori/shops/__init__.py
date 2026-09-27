@@ -66,7 +66,11 @@ SHOP_PARAMS = {
 }
 
 START_BALANCE_CENTS = 50_000  # $500.00 per shop
-STAFF_WAGE_CENTS = 3_000      # $30.00 / staff / day (matches out-of-town wage)
+
+# Phase 2 balance amendment: wages only on open days, sustainable vs fixed $30.
+# Each open-day staffer gets a small base plus an equal share of a revenue pool.
+WAGE_BASE_CENTS = 500         # $5.00 per staffer when the shop is open
+WAGE_REVENUE_SHARE_PCT = 20   # 20% of revenue booked this morning, split among staff
 
 # Weather capacity factors when the shop stays open. Storm forces closed.
 WEATHER_AVAILABLE_FACTOR = {
@@ -108,6 +112,14 @@ def _debit(balance: int, amount: int) -> tuple[int, int]:
         return balance, 0
     paid = min(amount, balance)
     return balance - paid, paid
+
+
+def wage_per_staff(staff_count: int, revenue_booked_cents: int) -> int:
+    """Open-day wage for one staffer: base + equal share of the revenue pool."""
+    if staff_count <= 0:
+        return 0
+    pool = (max(0, revenue_booked_cents) * WAGE_REVENUE_SHARE_PCT) // 100
+    return WAGE_BASE_CENTS + pool // staff_count
 
 
 class System:
@@ -176,6 +188,7 @@ class System:
             else:
                 pending = {shop_id: 0 for shop_id in SHOP_IDS}
 
+        settled_revenue: dict[str, int] = {shop_id: 0 for shop_id in SHOP_IDS}
         for shop_id in SHOP_IDS:
             shop = shops[shop_id]
             params = SHOP_PARAMS[shop_id]
@@ -190,6 +203,7 @@ class System:
                 price = shop["price_cents"]
                 units = (revenue // price) if price else 0
             shop["sold_yesterday"] = units
+            settled_revenue[shop_id] = revenue
 
             balance = shop["balance_cents"]
             balance = _credit(balance, revenue)
@@ -256,15 +270,14 @@ class System:
         if condition == "storm":
             town.emit("shops_closed", reason="storm", open_count=0)
 
-        # --- 4. Pay wages (same day; partial OK)
+        # --- 4. Pay wages only on open days (base + share of booked revenue)
         wages_paid: dict[int, int] = {}
         for shop_id in SHOP_IDS:
             shop = shops[shop_id]
             staff = shop["staff"]
-            if not staff:
+            if not staff or not shop["open"]:
                 continue
-            # Pay wages even when closed — staff are still employed.
-            needed_each = STAFF_WAGE_CENTS
+            needed_each = wage_per_staff(len(staff), settled_revenue[shop_id])
             balance = shop["balance_cents"]
             for rid in staff:
                 paid = min(needed_each, balance)
@@ -337,6 +350,8 @@ __all__ = [
     "SHOP_IDS",
     "SHOP_PARAMS",
     "START_BALANCE_CENTS",
-    "STAFF_WAGE_CENTS",
+    "WAGE_BASE_CENTS",
+    "WAGE_REVENUE_SHARE_PCT",
+    "wage_per_staff",
     "WEATHER_AVAILABLE_FACTOR",
 ]

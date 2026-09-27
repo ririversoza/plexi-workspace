@@ -39,8 +39,12 @@ Card fees, day-1 equipment, and endogenous pricing from the competition entries 
 1. **Settle lag.** Credit each shop for `pending_revenue_cents` (or, if empty, for current `residents.purchases` / `spent_cents` — still yesterday because residents have not ticked yet). Debit COGS = `sold_yesterday * unit_cost` with no overdraft. Prefer `spent_cents` when present.
 2. **Staff.** `staff` = resident ids whose `job` equals the shop id (sorted). Missing residents → empty staff.
 3. **Open / available.** Storm → every shop `open=False`, `available=0`. Otherwise pay daily overhead if affordable; if not, close and emit `shop_closed`. Rain keeps the shop open at 70% capacity; snow at 50%; sun/cloud at 100% (`int(capacity * factor)`).
-4. **Wages.** Pay `STAFF_WAGE_CENTS = 3000` ($30) per staff member **every day** (including storm closures). Partial pay if the ledger is short; emit `wages_short`. Listed in `wages_paid` for residents to credit the same day.
+4. **Wages (open days only).** Pay only when `open` is true after overhead. Each staffer gets `WAGE_BASE_CENTS = 500` ($5) plus an equal share of `20%` of the revenue booked that morning (`WAGE_REVENUE_SHARE_PCT`). Closed / storm days pay **$0** (no `wages_short` for being closed). Partial pay if cash is short; emit `wages_short`. Listed in `wages_paid` for residents to credit the same day.
 5. **Pending refresh.** A `town.subscribe` callback copies new `residents.purchases` into `pending_revenue_cents` when a *later* system emits (residents themselves do not emit). Batches already booked this morning are skipped via a signature, so day-90 sales stay visible in `pending_revenue_cents` with no day-91 tick. If no later system emits, the next morning's fallback still settles from `residents.purchases`.
+
+### Why this wage rule
+
+Fixed $30/day × 2 staff, paid even when closed, bankrupted small carts by days 8–11. Open-only base + revenue share scales with sales and skips storm / overhead-closed days, so thin-margin shops can survive while staff still share in good days.
 
 ## Money rules
 
