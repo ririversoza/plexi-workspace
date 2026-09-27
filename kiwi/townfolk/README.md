@@ -137,3 +137,57 @@ Input revisions:
 
 These acceptance results cover the specified seed and 90-day horizon; they
 are not a guarantee for every seed or an indefinitely sustainable economy.
+
+## Resident diary
+
+```sh
+python3 -m kiwi.townfolk.diary 34
+python3 -m kiwi.townfolk.diary "Gia Chen" --seed 42
+python3 -m kiwi.townfolk.diary --random-pick --seed 42
+```
+
+The diary runs one 90-day town in-process through `taro.tinytown`, with the
+installed systems and the log's `csv_path=None` before setup. It prints to
+stdout and creates no reports, CSVs, or scratch files. Use Python's `-B` option
+if you also want to suppress interpreter bytecode caches.
+
+Each row shows day, weather, job, actual wages received, successful purchases
+(shop ID and the actual price paid), wallet after, and mood. Assumptions:
+
+- IDs are exact integers; full names match case-insensitively with surrounding
+  whitespace ignored. Quote names containing spaces. Unknown IDs/names and
+  duplicate-name matches produce a clear error; use an ID to resolve ambiguity.
+- Provide either a selector or `--random-pick`, never both. Default seed: 42.
+  Random-pick hashes the decimal seed with SHA-256, interprets the digest as
+  an unsigned big-endian integer, and takes modulo the number of residents
+  sorted by ID. It makes no `town.rng` draws and is stable for a given roster
+  and seed. It is a deterministic selection, not a separate simulated event.
+- The optional `System(purchase_observer=callback)` reporting hook receives
+  `(resident_id, shop_id, price_cents)` immediately after each successful
+  purchase. These are immutable values; no town or person reference is passed.
+  The diary stores receipts outside town state and emits no events. The hook
+  adds no RNG draws and does not alter purchase selection or wages.
+- A wrapper snapshots wallets immediately before the residents tick and
+  records rows immediately after it. Actual wage income is the closing wallet
+  minus opening wallet plus receipts. This uses the residents model's rule
+  that wages and purchases are the only daily wallet movements, so partial
+  shop payments and weekday outside wages are both counted exactly. Starting
+  savings are excluded from total earned. Prices are captured at purchase
+  time, so later price changes cannot rewrite history.
+- Favourite shop means most successful purchases; ties use ascending shop ID.
+  With no purchases, it is `none`. Happiest/saddest compare available mood
+  scores; tied scores use the earliest day. Mood and those summary days show
+  `n/a` until the happiness system (#35) is merged. The diary never invents
+  mood scores. Missing weather likewise displays `n/a`; unemployed jobs are
+  labeled explicitly. Missing businesses still permits outside wages.
+- Missing residents or engine produces a readable message and exit status 1.
+  CLI syntax errors return 2; success returns 0. Other optional systems are
+  skipped by the engine loader. No simulation data is persisted.
+
+Validation: fourteen resident tests (including diary determinism, lookup,
+missing systems, variable-price receipts, wage/wallet conservation, summaries,
+and exact observed-versus-unobserved daily state/RNG) plus six emergency tests
+pass. A full-town seed-42 comparison at main `8ad2f2d` also confirmed identical
+state, events, and RNG after 90 days with CSV writer calls forbidden. It
+produced 120 in-memory diaries of 90 days each. The CLI random pick selected
+Gia Chen (#34), with $1,300 earned, $976.50 spent, and favourite `daifuku-cart`.
