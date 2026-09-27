@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Lighthouse nightlight. Home, in one beam. -->
+  <path d="M34 22l24-8v18z" fill="#f2d479" opacity="0.35"/>
+  <path d="M30 22l-24-8v18z" fill="#f2d479" opacity="0.35"/>
+  <rect x="18" y="56" width="28" height="7" rx="2" fill="#3a3f4b" stroke="#2b2b33" stroke-width="2.5"/>
+  <path d="M24 56l3-26h10l3 26z" fill="#e8e6df" stroke="#2b2b33" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M25.6 42h12.8l.6 5H25z" fill="#8fb9a8"/>
+  <rect x="26" y="19" width="12" height="11" rx="1" fill="#f2d479" stroke="#2b2b33" stroke-width="2.5"/>
+  <path d="M24 19h16l-8-8z" fill="#3a3f4b" stroke="#2b2b33" stroke-width="2.5" stroke-linejoin="round"/>
+  <rect x="30" y="50" width="4" height="6" rx="2" fill="#2b2b33"/>
+</svg>
