@@ -22,7 +22,11 @@ parts = folder.relative_to(root).parts
 package = len(parts) > 1 and all((root.joinpath(*parts[:i]) / "__init__.py").is_file()
               for i in range(1, len(parts) + 1))
 if not package:
-    sys.path.append(str(folder))
+    # Keep local helpers ahead of installed packages without shadowing stdlib.
+    installed = next((index for index, path in enumerate(sys.path)
+                      if any(part in ("site-packages", "dist-packages")
+                             for part in pathlib.Path(path).parts)), len(sys.path))
+    sys.path.insert(installed, str(folder))
 names = [(".".join(parts) + "." if package else "") + pathlib.Path(name).stem
          for name in sys.argv[4:]]
 suite = unittest.defaultTestLoader.loadTestsFromNames(names)

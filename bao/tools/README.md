@@ -22,8 +22,9 @@ module names, matching the READMEs' repository-root unittest discovery. Plain
 folders use local module names, matching discovery without `-t .`. Package suites use only the repo root on the child import path, preventing
 modules such as `mochi/tinytown/inspect.py` from shadowing the standard library.
 Plain folders and legacy direct-agent suites (such as Bao's roster tests) also
-append their own folder after standard-library paths to support local imports such as `business`, `run` and
-`roster`. Each subprocess keeps these local imports isolated from other suites.
+place their own folder after standard-library paths but before installed packages
+to support local imports such as `business`, `run` and `roster`. Each subprocess
+keeps these local imports isolated from other suites.
 
 Each child gets a fresh working directory under `$TMPDIR` (or the platform temp
 directory when unset). Its `TMPDIR`, `TMP`, and `TEMP` point there too. Temporary
