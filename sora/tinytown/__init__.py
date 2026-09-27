@@ -1,5 +1,7 @@
 """Tiny Town economy: population, jobs, shops and the town treasury."""
 
+import math
+
 START_POPULATION = 500
 START_EMPLOYMENT_RATE = 0.90
 START_TREASURY = 1000.0
@@ -44,7 +46,8 @@ def _public_works(town, prev, treasury):
     if paid >= project["cost"]:
         town.emit("project_completed", name=project["name"], cost=project["cost"])
         return treasury, None, completed + [project["name"]]
-    return treasury, {**project, "paid": paid, "progress": round(paid / project["cost"], 4)}, completed
+    progress = math.floor(paid / project["cost"] * 10_000) / 10_000  # floor keeps it < 1 until fully paid
+    return treasury, {**project, "paid": paid, "progress": progress}, completed
 
 
 class System:

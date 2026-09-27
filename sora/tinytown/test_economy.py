@@ -172,6 +172,23 @@ class PublicWorksTest(unittest.TestCase):
         spent += (after["project"] or {}).get("paid", 0.0)
         self.assertAlmostEqual(before["treasury"] - spent, after["treasury"], places=2)
 
+    def test_progress_stays_below_one_until_paid(self):
+        town = FakeTown()
+        economy = System()
+        economy.setup(town)
+        town.state["weather"] = {"condition": "storm"}
+        town.state["residents"] = {"count": 0, "employed": 0}
+        town.state["businesses"] = {"open_count": 0}
+        town.state["economy"].update(
+            treasury=PROJECT_RESERVE + 19.99,
+            project={"name": "market square", "cost": 400.0, "paid": 380.0, "progress": 0.95},
+        )
+        economy.tick(town)
+        project = town.state["economy"]["project"]
+        self.assertEqual(project["paid"], 399.99)
+        self.assertLess(project["progress"], 1.0)
+        self.assertNotIn("market square", town.state["economy"]["projects_completed"])
+
     def test_tolerates_state_without_project_keys(self):
         town = FakeTown()
         economy = System()

@@ -12,7 +12,7 @@ The town's people, jobs, shops, budget and public works. Follows the contract in
 | `employed` | int, 0 ≤ employed ≤ population | residents with a job today |
 | `treasury` | float ≥ 0 | town budget, rounded to cents |
 | `shops_open` | int ≥ 0 | shops trading today (0–20 in the Phase 1 model, 0–6 from `businesses`) |
-| `project` | dict or `None` | public works in progress: `name`, `cost`, `paid` (dollars), `progress` (0 ≤ p < 1). `None` when nothing is being built |
+| `project` | dict or `None` | public works in progress: `name`, `cost`, `paid` (dollars), `progress` (0 ≤ p < 1, floored to 4 places). `None` when nothing is being built |
 | `projects_completed` | list of str | finished projects, in build order |
 
 **Reads** (read-only, in `tick` only; each is optional):
