@@ -7,6 +7,7 @@ without any peer packages installed.
 from __future__ import annotations
 
 import io
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -15,7 +16,9 @@ from typing import Any, List, Optional
 
 from taro.tinytown.engine import DEFAULT_DAYS, DEFAULT_SEED, TICK_ORDER, Town, run_town
 from taro.tinytown.run import (
+    build_timeline,
     cli,
+    count_events_by_kind,
     daily_summary,
     evaluate_targets,
     final_report,
@@ -27,6 +30,9 @@ from taro.tinytown.run import (
     parse_args,
     parse_seed_range,
     shop_leaderboard,
+    snapshot_day,
+    validate_export_path,
+    write_timeline,
 )
 
 
@@ -344,6 +350,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.days, DEFAULT_DAYS)
         self.assertFalse(args.quiet)
         self.assertIsNone(args.seeds)
+        self.assertIsNone(args.export)
 
     def test_parse_args_flags(self) -> None:
         args = parse_args(["--seed", "7", "--days", "3", "--quiet"])
@@ -480,6 +487,260 @@ class CliTests(unittest.TestCase):
             if getattr(system, "name", None) == "log":
                 self.assertIsNone(getattr(system, "csv_path", "missing"))
 
+
+
+
+class ExportTests(unittest.TestCase):
+    def test_parse_export_flag(self) -> None:
+        args = parse_args([])
+        self.assertIsNone(args.export)
+        args = parse_args(["--export", "/tmp/town.json"])
+        self.assertEqual(args.export, "/tmp/town.json")
+
+    def test_snapshot_day_schema_is_compact(self) -> None:
+        town = Town(seed=1)
+        town.day = 2
+        town.state["weather"] = {"condition": "sun", "temp_c": 20.0, "season": "summer"}
+        town.state["economy"] = {
+            "population": 10,
+            "employed": 8,
+            "treasury": 100.0,
+            "shops_open": 2,
+        }
+        town.state["traffic"] = {"commuters": 5, "congestion": 0.1, "accidents_today": 0}
+        town.state["emergency"] = {
+            "incidents_today": 1,
+            "responded": 1,
+            "avg_response_min": 5.0,
+            "open_incidents": 0,
+        }
+        town.state["businesses"] = {
+            "shops": {
+                "fold-post": {
+                    "name": "Fold Post",
+                    "open": True,
+                    "price_cents": 500,
+                    "available": 3,
+                    "balance_cents": 1000,
+                    "sold_yesterday": 1,
+                    "staff": [1, 2],
+                }
+            }
+        }
+        town.state["residents"] = {
+            "people": [{"id": 1, "name": "Ada", "wallet_cents": 9}],
+            "count": 120,
+            "employed": 90,
+            "avg_wallet_cents": 2500,
+            "avg_mood": 0.7,
+            "mood_bands": {"happy": 10, "ok": 5},
+        }
+        snap = snapshot_day(town)
+        self.assertEqual(snap["day"], 2)
+        self.assertEqual(snap["weather"]["condition"], "sun")
+        self.assertEqual(snap["economy"]["treasury"], 100.0)
+        self.assertEqual(
+            snap["businesses"]["fold-post"],
+            {
+                "open": True,
+                "price_cents": 500,
+                "available": 3,
+                "balance_cents": 1000,
+                "sold_yesterday": 1,
+            },
+        )
+        self.assertNotIn("staff", snap["businesses"]["fold-post"])
+        self.assertEqual(
+            snap["residents"],
+            {
+                "count": 120,
+                "employed": 90,
+                "avg_wallet_cents": 2500,
+                "avg_mood": 0.7,
+                "mood_bands": {"happy": 10, "ok": 5},
+            },
+        )
+        self.assertNotIn("people", snap["residents"])
+
+    def test_build_timeline_and_events_by_kind(self) -> None:
+        daily: list = []
+        weather = FakeSystem("weather")
+        businesses = FakeSystem("businesses")
+
+        def on_day(t: Town) -> None:
+            daily.append(snapshot_day(t))
+
+        town = run_town([weather, businesses], days=2, seed=3, on_day=on_day)
+        town.emit("bonus")
+        timeline = build_timeline(town, [weather, businesses], daily)
+        self.assertEqual(timeline["seed"], 3)
+        self.assertEqual(timeline["days"], 2)
+        self.assertEqual(timeline["systems"], ["weather", "businesses"])
+        self.assertEqual(len(timeline["daily"]), 2)
+        self.assertEqual(timeline["daily"][0]["day"], 1)
+        # Keys are system.kind so weather and businesses both emitting 'tick' do not collide.
+        self.assertIn("weather.tick", timeline["events_by_kind"])
+        self.assertIn("businesses.tick", timeline["events_by_kind"])
+        self.assertNotIn("tick", timeline["events_by_kind"])
+        self.assertEqual(count_events_by_kind(town)[".bonus"], 1)
+        self.assertNotIn("events", timeline)
+
+    def test_snapshot_day_deep_copies_nested_state(self) -> None:
+        town = Town(seed=1)
+        town.day = 1
+        nested = {"nested": {"temp_c": 20.0}}
+        town.state["weather"] = {"condition": "sun", "extra": nested}
+        snap = snapshot_day(town)
+        nested["nested"]["temp_c"] = 99.0
+        town.state["weather"]["condition"] = "rain"
+        self.assertEqual(snap["weather"]["condition"], "sun")
+        self.assertEqual(snap["weather"]["extra"]["nested"]["temp_c"], 20.0)
+
+    def test_validate_export_path_rejects_empty_and_missing_parent(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_export_path("")
+        with self.assertRaises(ValueError):
+            validate_export_path("   ")
+        with self.assertRaises(ValueError):
+            validate_export_path("/no/such/parent/dir/out.json")
+
+    def test_validate_export_path_rejects_existing_directory(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(dir=__import__("os").environ.get("TMPDIR")) as tmp:
+            with self.assertRaises(ValueError) as ctx:
+                validate_export_path(tmp)
+            self.assertIn("directory", str(ctx.exception).lower())
+
+    def test_cli_export_bad_path_exits_2_before_run(self) -> None:
+        import taro.tinytown.run as run_mod
+
+        original = run_mod.load_systems
+        called = {"n": 0}
+
+        def fake_load(**_kwargs):
+            called["n"] += 1
+            return []
+
+        run_mod.load_systems = fake_load
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                cli(["--export", "   ", "--days", "1"])
+            self.assertEqual(ctx.exception.code, 2)
+            self.assertEqual(called["n"], 0)
+
+            with self.assertRaises(SystemExit) as ctx2:
+                cli(["--export", "/no/such/parent/town.json", "--days", "1"])
+            self.assertEqual(ctx2.exception.code, 2)
+            self.assertEqual(called["n"], 0)
+
+            import tempfile
+
+            with tempfile.TemporaryDirectory(dir=__import__("os").environ.get("TMPDIR")) as tmp:
+                with self.assertRaises(SystemExit) as ctx3:
+                    cli(["--export", tmp, "--days", "1"])
+                self.assertEqual(ctx3.exception.code, 2)
+                self.assertEqual(called["n"], 0)
+        finally:
+            run_mod.load_systems = original
+
+    def test_cli_seeds_with_export_exits_2(self) -> None:
+        import taro.tinytown.run as run_mod
+
+        original = run_mod.load_systems
+        original_seeds = run_mod.run_seeds_report
+        called = {"load": 0, "seeds": 0}
+
+        def fake_load(**_kwargs):
+            called["load"] += 1
+            return []
+
+        def fake_seeds(*_args, **_kwargs):
+            called["seeds"] += 1
+            return "table", []
+
+        run_mod.load_systems = fake_load
+        run_mod.run_seeds_report = fake_seeds
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                cli(["--seeds", "1-2", "--export", "/tmp/town.json"])
+            self.assertEqual(ctx.exception.code, 2)
+            self.assertEqual(called["load"], 0)
+            self.assertEqual(called["seeds"], 0)
+            help_text = run_mod.build_parser().format_help()
+            self.assertNotIn("stdout unchanged", help_text)
+            self.assertIn("disables event-log", help_text)
+        finally:
+            run_mod.load_systems = original
+            run_mod.run_seeds_report = original_seeds
+
+    def test_write_timeline_exact_path(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(dir=__import__("os").environ.get("TMPDIR")) as tmp:
+            path = str(Path(tmp) / "nested" / "town.json")
+            Path(tmp, "nested").mkdir()
+            write_timeline(
+                path,
+                {"seed": 1, "days": 0, "systems": [], "daily": [], "events_by_kind": {}},
+            )
+            data = json.loads(Path(path).read_text())
+            self.assertEqual(data["seed"], 1)
+            self.assertTrue(Path(path).is_file())
+
+    def test_export_keeps_stdout_identical(self) -> None:
+        import tempfile
+
+        import taro.tinytown.run as run_mod
+
+        original = run_mod.load_systems
+        run_mod.load_systems = lambda **_kwargs: [FakeSystem("weather")]
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                export_path = str(Path(tmp) / "out.json")
+                with redirect_stdout(io.StringIO()) as buf_plain:
+                    main(days=2, seed=9)
+                plain = buf_plain.getvalue()
+                with redirect_stdout(io.StringIO()) as buf_export:
+                    main(days=2, seed=9, export_path=export_path)
+                self.assertEqual(buf_export.getvalue(), plain)
+                data = json.loads(Path(export_path).read_text())
+                self.assertEqual(data["seed"], 9)
+                self.assertEqual(data["days"], 2)
+                self.assertEqual(len(data["daily"]), 2)
+                self.assertIn("events_by_kind", data)
+                self.assertEqual(parse_args(["--export", export_path]).export, export_path)
+        finally:
+            run_mod.load_systems = original
+
+    def test_default_cli_stdout_byte_identical_to_main(self) -> None:
+        """No-arg module invocation matches ``main()`` stdout bytes."""
+        import os
+        import subprocess
+        import tempfile
+
+        import taro.tinytown.run as run_mod
+
+        root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            try:
+                os.chdir(tmp)
+                with redirect_stdout(io.StringIO()) as buf:
+                    run_mod.main()
+                main_bytes = buf.getvalue().encode()
+                env = os.environ.copy()
+                env["PYTHONPATH"] = str(root) + os.pathsep + env.get("PYTHONPATH", "")
+                proc = subprocess.run(
+                    [sys.executable, "-m", "taro.tinytown.run"],
+                    check=True,
+                    capture_output=True,
+                    env=env,
+                    cwd=tmp,
+                )
+                self.assertEqual(proc.stdout, main_bytes)
+            finally:
+                os.chdir(cwd)
 
 
 if __name__ == "__main__":

@@ -17,16 +17,18 @@ Other weather fields are unused. Values follow the contract's types; malformed
 objects and nonnumeric employment are not supported. Negative employment and individual purchase counts are
 defensively clamped to zero.
 
-Writes only `state['traffic']`, replacing all three daily values:
+Writes only `state['traffic']`, replacing all five daily values:
 
-- `commuters`: nonnegative integer total road trips (work plus shopping).
+- `commuters`: nonnegative integer car trips after bus riders are removed.
   At most out-of-town workers plus `sum(nonnegative purchases) // 4` when
   residents exist; at most employed workers in the Phase 1 fallback.
 - `congestion`: float from 0.0 to 1.0.
-- `accidents_today`: integer from zero to the number of commuters.
+- `accidents_today`: integer from zero to the number of car commuters.
+- `bus_running`: bool, scheduled using yesterday's congestion.
+- `bus_riders`: integer from 0 to 40, never above today's pre-bus trip demand.
 
-Setup initializes these to `0`, `0.0`, and `0` and consumes no randomness or
-events. Each tick emits one `traffic_daily` event with the three output fields;
+Setup initializes counts to `0`, congestion to `0.0`, and bus_running to `False` and consumes no randomness or
+events. Each tick emits one `traffic_daily` event with all five output fields;
 the town supplies day/system metadata. Counts reset each day; no backlog exists.
 The intended order is weather, businesses, residents, economy, traffic, emergency, so traffic uses
 today's upstream values. The model also works alone for all 90 days.
@@ -46,6 +48,26 @@ This deterministic share consumes no additional RNG draws and is bounded by the
 purchase count. Work and shopping trips are added before congestion and accidents
 are calculated. Zero workers can still produce shopping traffic; zero workers
 and zero purchases produce zero trips and accidents. Phase 1 has no shopping trips.
+
+### Bus line
+
+When yesterday's `traffic.congestion` is **strictly above 0.6**, the bus runs
+today. Missing previous congestion defaults to zero, so no bus runs on day 1.
+The bus takes **25%** of today's combined work and shopping trip demand, rounded
+down, capped at **40 riders**: `min(40, demand // 4)`. These riders are removed
+before car congestion and accident risk are calculated. The same rule applies
+to the Phase 1 fallback. No new randomness, fares, treasury costs or upstream
+state changes are introduced. The bus vehicle and its accident risk are not
+modeled; this is a simplified car-demand reduction model.
+
+`bus_running` describes the scheduled service, even if demand is zero and no
+one rides. It is recomputed daily from yesterday's car congestion, so service
+stops the day after congestion falls to 0.6 or below. This may alternate service
+on/off around the threshold. Existing five-draw sampling is unchanged even on
+empty bus days. Reduced congestion lowers the congestion component of per-car
+accident risk unless congestion remains capped at 1.0; realized accident counts
+are still stochastic. At the current 120-resident scale the bus may stay idle;
+high-demand tests exercise the trigger and capacity cap.
 
 Normal road capacity is **500 commuters/day**. Congestion is commuters divided
 by weather-adjusted capacity, capped at **1.0** (zero demand gives **0.0**).
@@ -93,7 +115,8 @@ From the repository root:
 python3 -m unittest discover -s bao/tinytown -t .
 ```
 
-Tests use a small fake town, with no dependency on another owner's package.
+Traffic tests use a fake town; the full-town acceptance test runs when all
+systems are installed: `python3 -m unittest bao.tinytown.test_town_acceptance`.
 
 ### Phase 2 combined acceptance (fixed-draw rework)
 

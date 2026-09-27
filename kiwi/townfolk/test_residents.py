@@ -37,7 +37,7 @@ class ResidentsTests(unittest.TestCase):
         self.assertEqual(Counter(p["job"] for p in people),
                          Counter({**STAFF_COUNTS, "out-of-town": 94, None: 18}))
         for person in people:
-            self.assertEqual(set(person), {"id", "name", "street", "job", "wallet_cents"})
+            self.assertEqual(set(person), {"id", "name", "street", "job", "wallet_cents", "mood"})
             self.assertTrue(2000 <= person["wallet_cents"] <= 10000)
 
     def test_setup_does_not_read_other_systems(self):
@@ -49,6 +49,26 @@ class ResidentsTests(unittest.TestCase):
                 raise AssertionError("setup read another system")
         self.town.state = WriteOnly()
         self.system.setup(self.town)
+
+    def test_empty_people_after_setup(self):
+        state = self.town.state["residents"]
+        state["people"] = []
+        state["purchases"] = {SHOP_IDS[0]: 1}
+        state["spent_cents"] = {SHOP_IDS[0]: 500}
+        self.town.state["businesses"] = businesses()
+        self.town.state["businesses"]["wages_paid"] = {1: 500}
+        inputs = copy.deepcopy(self.town.state["businesses"])
+        rng = self.town.rng.getstate()
+        for day in (1, 2):
+            self.town.day = day
+            self.system.tick(self.town)
+            self.assertEqual(state, {
+                "people": [], "purchases": {}, "spent_cents": {},
+                "count": 0, "employed": 0, "avg_wallet_cents": 0,
+                "avg_mood": 0, "mood_bands": {"happy": 0, "ok": 0, "unhappy": 0},
+            })
+            self.assertEqual(self.town.rng.getstate(), rng)
+            self.assertEqual(self.town.state["businesses"], inputs)
 
     def test_determinism_over_90_days(self):
         def run(seed):
@@ -193,7 +213,10 @@ class ResidentsTests(unittest.TestCase):
                 self.town.state["businesses"]["wages_paid"] = {1: -100, 2: True, 3: 1.5, 999: 100}
                 before = copy.deepcopy(self.town.state["residents"]["people"])
                 self.system.tick(self.town)
-                self.assertEqual(self.town.state["residents"]["people"], before)
+                self.assertEqual(
+                    [{k: v for k, v in p.items() if k != "mood"}
+                     for p in self.town.state["residents"]["people"]],
+                    [{k: v for k, v in p.items() if k != "mood"} for p in before])
                 self.assertEqual(self.town.state["residents"]["purchases"], {})
 
 
