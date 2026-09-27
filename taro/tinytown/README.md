@@ -128,6 +128,9 @@ Intentionally omitted: per-resident `people` lists, shop staff lists, wages maps
 python3 -m taro.tinytown.dashboard --out /tmp/town.html
 python3 -m taro.tinytown.dashboard --out /tmp/town.html --seed 42
 python3 -m taro.tinytown.dashboard --out /tmp/town.html --from /tmp/town-timeline.json
+python3 -m taro.tinytown.dashboard --seeds 1-20 --out /tmp/town-seeds.html
 ```
 
 Writes **one** static HTML file to `--out` only: inline CSS, inline SVG charts, light/dark via `prefers-color-scheme`, phone-readable. No JavaScript libraries and no external assets. When running the town (no `--from`), the log is constructed with `csv_path=None`. Charts: shop balances (front-gapped if a shop opens mid-run), average wallet, weather strip, traffic congestion, final shop leaderboard. Missing wallet/congestion plot as gaps; missing weather shows as `n/a`. `--out` is validated like `--export` (non-empty, not an existing directory, parent must exist) and rejected with exit code 2. Snapshot helpers are imported from `taro.tinytown.run` so the timeline schema cannot drift.
+
+`--seeds A-B` writes a multi-seed page instead: small-multiple sparklines of average wallet and shops open per seed (shared y-scale), plus a PASS/FAIL grid against the three Phase 2/3 targets. It calls the runner's `run_seeds_report` / `parse_seed_range` (no copy-pasted seed loop). Incompatible with `--from` (exit 2).

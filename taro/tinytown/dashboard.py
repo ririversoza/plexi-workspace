@@ -23,10 +23,16 @@ from taro.tinytown.engine import (  # noqa: E402
     run_town,
 )
 from taro.tinytown.run import (  # noqa: E402
+    MAX_AVG_WALLET_CENTS,
+    MAX_ZERO_STREAK,
+    MIN_SHOPS_OPEN,
     _SHOP_EXPORT_FIELDS,
     _count_events_by_kind,
     _load_systems,
     _snapshot_day,
+    format_dollars,
+    parse_seed_range,
+    run_seeds_report,
     validate_export_path,
 )
 
@@ -39,6 +45,7 @@ __all__ = [
     "main",
     "parse_args",
     "render_html",
+    "render_seeds_html",
     "write_dashboard",
     "_SHOP_EXPORT_FIELDS",
 ]
@@ -491,6 +498,48 @@ footer {
   main { padding: 0.75rem; gap: 0.75rem; }
   .chart { padding: 0.7rem; border-radius: 8px; }
   th, td { padding: 0.4rem 0.35rem; font-size: 0.85rem; }
+  .multiples { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+}
+.multiples {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.55rem;
+}
+.multiple {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.45rem 0.5rem 0.55rem;
+}
+.multiple h4 {
+  margin: 0 0 0.2rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+.multiple .tag {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+}
+.tag-pass { color: #2a6f4a; }
+.tag-fail { color: #a33b2b; }
+@media (prefers-color-scheme: dark) {
+  .tag-pass { color: #7dcea0; }
+  .tag-fail { color: #f0a090; }
+}
+.pass-grid td.result-pass { color: #2a6f4a; font-weight: 600; }
+.pass-grid td.result-fail { color: #a33b2b; font-weight: 600; }
+@media (prefers-color-scheme: dark) {
+  .pass-grid td.result-pass { color: #7dcea0; }
+  .pass-grid td.result-fail { color: #f0a090; }
+}
+.summary-line {
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
 }
 """
 
@@ -562,6 +611,224 @@ def render_html(timeline: Dict[str, Any]) -> str:
 """
 
 
+def _series_y_range(
+    series_list: Sequence[Sequence[Optional[float]]],
+) -> Tuple[float, float]:
+    vals = [v for series in series_list for v in series if v is not None]
+    if not vals:
+        return 0.0, 1.0
+    y_min = min(vals)
+    y_max = max(vals)
+    if y_min == y_max:
+        y_min -= 1.0
+        y_max += 1.0
+    margin = (y_max - y_min) * 0.08
+    return y_min - margin, y_max + margin
+
+
+def _mini_line_svg(
+    values: Sequence[Optional[float]],
+    *,
+    y_min: float,
+    y_max: float,
+    colour: str,
+    width: int = 220,
+    height: int = 72,
+    pad: float = 8.0,
+    label: str = "",
+) -> str:
+    """Compact single-series sparkline for small multiples."""
+    segments = _polyline_segments(
+        values,
+        width=float(width),
+        height=float(height),
+        pad=pad,
+        y_min=y_min,
+        y_max=y_max,
+    )
+    lines = "".join(
+        f'<polyline fill="none" stroke="{colour}" stroke-width="1.75" points="{pts}" />'
+        for pts in segments
+    )
+    return (
+        f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{_esc(label)}">'
+        f'<rect class="plot-bg" x="{pad}" y="{pad}" '
+        f'width="{width - 2 * pad}" height="{height - 2 * pad}" />'
+        f"{lines}</svg>"
+    )
+
+
+def _wallet_dollars_series(row: Dict[str, Any]) -> List[Optional[float]]:
+    raw = row.get("avg_wallet_series_cents") or []
+    out: List[Optional[float]] = []
+    for cents in raw:
+        if cents is None:
+            out.append(None)
+            continue
+        try:
+            out.append(int(cents) / 100.0)
+        except (TypeError, ValueError):
+            out.append(None)
+    return out
+
+
+def _shops_series(row: Dict[str, Any]) -> List[Optional[float]]:
+    raw = row.get("shops_open_series") or []
+    out: List[Optional[float]] = []
+    for value in raw:
+        try:
+            out.append(float(value))
+        except (TypeError, ValueError):
+            out.append(None)
+    return out
+
+
+def _seeds_multiples_html(
+    rows: Sequence[Dict[str, Any]],
+    *,
+    title: str,
+    series_of,
+    colour: str,
+    unit: str,
+) -> str:
+    if not rows:
+        return (
+            f'<div class="chart"><h3>{_esc(title)}</h3>'
+            f'<p class="muted">No seeds</p></div>'
+        )
+    prepared = [(row, series_of(row)) for row in rows]
+    y_min, y_max = _series_y_range([series for _, series in prepared])
+    cards: List[str] = []
+    for row, series in prepared:
+        seed = row.get("seed", "?")
+        passed = bool(row.get("pass"))
+        tag = "PASS" if passed else "FAIL"
+        tag_class = "tag-pass" if passed else "tag-fail"
+        svg = _mini_line_svg(
+            series,
+            y_min=y_min,
+            y_max=y_max,
+            colour=colour,
+            label=f"seed {seed} {unit}",
+        )
+        cards.append(
+            f'<div class="multiple">'
+            f'<h4><span>seed {_esc(seed)}</span>'
+            f'<span class="tag {tag_class}">{tag}</span></h4>'
+            f"{svg}</div>"
+        )
+    return (
+        f'<div class="chart"><h3>{_esc(title)}</h3>'
+        f'<p class="muted">Shared {_esc(unit)} scale across seeds</p>'
+        f'<div class="multiples">{"".join(cards)}</div></div>'
+    )
+
+
+def _seeds_pass_grid_html(rows: Sequence[Dict[str, Any]]) -> str:
+    if not rows:
+        return '<div class="chart"><h3>PASS / FAIL grid</h3><p class="muted">No seeds</p></div>'
+    body: List[str] = []
+    passed = 0
+    for row in rows:
+        ok = bool(row.get("pass"))
+        if ok:
+            passed += 1
+        result = "PASS" if ok else "FAIL"
+        result_class = "result-pass" if ok else "result-fail"
+        wallet = row.get("avg_wallet_cents")
+        wallet_s = format_dollars(wallet) if wallet is not None else "?"
+        body.append(
+            "<tr>"
+            f"<td class=\"num\">{_esc(row.get('seed'))}</td>"
+            f"<td class=\"num\">{_esc(row.get('shops_open'))}</td>"
+            f"<td class=\"num\">{_esc(row.get('max_zero_streak'))}</td>"
+            f"<td class=\"num\">{_esc(wallet_s)}</td>"
+            f"<td class=\"num\">{_esc(row.get('treasury', '?'))}</td>"
+            f"<td class=\"{result_class}\">{result}</td>"
+            "</tr>"
+        )
+    total = len(rows)
+    targets = (
+        f"targets: ≥{MIN_SHOPS_OPEN} shops solvent, "
+        f"max $0 streak ≤{MAX_ZERO_STREAK}, "
+        f"avg wallet &lt; {format_dollars(MAX_AVG_WALLET_CENTS)}"
+    )
+    return f'''<div class="chart">
+  <h3>PASS / FAIL grid</h3>
+  <p class="summary-line"><strong>{passed} of {total} seeds pass</strong> · {targets}</p>
+  <div class="table-wrap">
+    <table class="pass-grid">
+      <thead><tr>
+        <th>Seed</th><th>Shops</th><th>Max $0</th><th>Avg wallet</th><th>Treasury</th><th>Result</th>
+      </tr></thead>
+      <tbody>
+        {"".join(body)}
+      </tbody>
+    </table>
+  </div>
+</div>'''
+
+
+def render_seeds_html(
+    rows: Sequence[Dict[str, Any]],
+    *,
+    days: int,
+    seed_lo: Any = None,
+    seed_hi: Any = None,
+) -> str:
+    """Render the multi-seed robustness dashboard (small multiples + PASS/FAIL)."""
+    if rows:
+        seeds = [row.get("seed") for row in rows]
+        seed_lo = seeds[0] if seed_lo is None else seed_lo
+        seed_hi = seeds[-1] if seed_hi is None else seed_hi
+    else:
+        seed_lo = "?" if seed_lo is None else seed_lo
+        seed_hi = "?" if seed_hi is None else seed_hi
+
+    wallet_section = _seeds_multiples_html(
+        rows,
+        title="Average wallet by seed",
+        series_of=_wallet_dollars_series,
+        colour="#2a6f6f",
+        unit="avg wallet ($)",
+    )
+    shops_section = _seeds_multiples_html(
+        rows,
+        title="Shops open by seed",
+        series_of=_shops_series,
+        colour="#c45c26",
+        unit="shops open",
+    )
+    grid = _seeds_pass_grid_html(rows)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Tiny Town seeds {_esc(seed_lo)}–{_esc(seed_hi)}</title>
+<style>
+{_css()}
+</style>
+</head>
+<body>
+<header>
+  <h1>Tiny Town · seeds</h1>
+  <p>seeds {_esc(seed_lo)}–{_esc(seed_hi)} · {_esc(days)} days · targets grid + small multiples</p>
+</header>
+<main>
+  {wallet_section}
+  {shops_section}
+  {grid}
+</main>
+<footer>
+  Static snapshot from the runner's --seeds metrics. Inline CSS and SVG only — no scripts, no external assets.
+</footer>
+</body>
+</html>
+"""
+
+
 def write_dashboard(path: str, timeline: Dict[str, Any]) -> None:
     """Write the HTML dashboard to the exact ``path``."""
     Path(path).write_text(render_html(timeline), encoding="utf-8")
@@ -599,6 +866,16 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help=f"days to simulate when running (default {DEFAULT_DAYS})",
     )
+    parser.add_argument(
+        "--seeds",
+        type=parse_seed_range,
+        default=None,
+        metavar="A-B",
+        help=(
+            "multi-seed page: small multiples + PASS/FAIL grid "
+            "(reuses runner --seeds metrics; incompatible with --from)"
+        ),
+    )
     return parser
 
 
@@ -612,25 +889,45 @@ def main(
     seed: int = DEFAULT_SEED,
     days: int = DEFAULT_DAYS,
     from_file: Optional[str] = None,
+    seeds: Optional[range] = None,
 ) -> str:
-    """Build timeline and write HTML to ``out``. Returns the HTML string."""
-    if from_file:
+    """Build timeline or seeds report and write HTML to ``out``. Returns HTML."""
+    if seeds is not None:
+        _table, rows = run_seeds_report(seeds, days=days)
+        seed_list = list(seeds)
+        html_text = render_seeds_html(
+            rows,
+            days=days,
+            seed_lo=seed_list[0] if seed_list else None,
+            seed_hi=seed_list[-1] if seed_list else None,
+        )
+    elif from_file:
         timeline = load_timeline(from_file)
+        html_text = render_html(timeline)
     else:
         timeline = collect_timeline(seed=seed, days=days)
-    html_text = render_html(timeline)
+        html_text = render_html(timeline)
     Path(out).write_text(html_text, encoding="utf-8")
     return html_text
 
 
 def cli(argv: Optional[Sequence[str]] = None) -> str:
     args = parse_args(argv)
+    if args.seeds is not None and args.from_file is not None:
+        print("error: --seeds cannot be combined with --from", file=sys.stderr)
+        raise SystemExit(2)
     try:
         validate_export_path(args.out, flag="--out")
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
-    return main(out=args.out, seed=args.seed, days=args.days, from_file=args.from_file)
+    return main(
+        out=args.out,
+        seed=args.seed,
+        days=args.days,
+        from_file=args.from_file,
+        seeds=args.seeds,
+    )
 
 
 if __name__ == "__main__":
