@@ -1,8 +1,9 @@
 """Tiny Town Gazette: a weekly newspaper, read from a finished town run.
 
-    python3 -m sora.gazette [--week N | --all]
+    python3 -m sora.gazette [--week N | --all] [--html [--out PATH]]
 
-Read-only: it never draws from ``town.rng`` and never writes town state or files.
+Read-only: it never draws from ``town.rng`` or writes town state, and writes no file
+except the HTML edition at ``--out PATH``.
 See README.md for the headline rules.
 """
 
@@ -186,20 +187,29 @@ def weather_line(days):
     return f"Weather: {summary}" + (f" | {min(temps):.0f} to {max(temps):.0f} C" if temps else "")
 
 
-def shop_table(days):
+def shop_rows(days):
+    """(name, open days, units sold or "?", balance text) per shop; None without shop data."""
     shops = get(days[-1], "businesses", "shops") if days else None
     if not isinstance(shops, dict):
-        return [f"Shops: {NOT_REPORTED}"]
+        return None
     sold = units_sold(days)
     order = [s for s in SHOP_IDS if s in shops] + sorted(s for s in shops if s not in SHOP_IDS)
-    rows = [f"{'Shop':<26}{'Open':>5}{'Sold':>6}{'Balance':>13}"]
+    rows = []
     for shop_id in order:
         shop = as_dict(shops[shop_id])
         open_days = sum(1 for d in days if as_dict(as_dict(get(d, "businesses", "shops")).get(shop_id)).get("open"))
         units = "?" if sold is None else sold.get(shop_id, 0)
-        name = str(shop.get("name", shop_id))[:25]
-        rows.append(f"{name:<26}{open_days:>4}d{units:>6}{cents(shop.get('balance_cents')):>13}")
+        rows.append((str(shop.get("name", shop_id)), open_days, units, cents(shop.get("balance_cents"))))
     return rows
+
+
+def shop_table(days):
+    rows = shop_rows(days)
+    if rows is None:
+        return [f"Shops: {NOT_REPORTED}"]
+    return [f"{'Shop':<26}{'Open':>5}{'Sold':>6}{'Balance':>13}"] + [
+        f"{name[:25]:<26}{open_days:>4}d{units:>6}{balance:>13}" for name, open_days, units, balance in rows
+    ]
 
 
 def wallets_line(days, before=None):
@@ -361,16 +371,32 @@ def week_number(text):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="python3 -m sora.gazette", description="The Tiny Town Gazette.")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--week", type=week_number, default=WEEKS, help=f"issue to print, 1-{WEEKS} (default {WEEKS})")
+    group.add_argument("--week", type=week_number, help=f"issue to print, 1-{WEEKS} (default {WEEKS}; --html: every week)")
     group.add_argument("--all", action="store_true", help="print every weekly issue")
+    parser.add_argument("--html", action="store_true", help="a self-contained HTML edition instead of text")
+    parser.add_argument("--out", metavar="PATH", help="with --html: write the page to PATH instead of stdout")
     args = parser.parse_args(argv)
+    if args.out and not args.html:
+        parser.error("--out needs --html")
     try:
         systems = load_systems()
     except ImportError:
         print(f"The presses are cold: taro.tinytown is {NOT_REPORTED}.")
         return 0
     days_seen, events = collect(systems)
-    print(render(days_seen, events, range(1, WEEKS + 1) if args.all else [args.week]))
+    weeks = range(1, WEEKS + 1) if args.all or (args.html and args.week is None) else [args.week or WEEKS]
+    if not args.html:
+        print(render(days_seen, events, weeks))
+        return 0
+    from sora.gazette.edition import render_html  # lazy: edition imports this module
+
+    page = render_html(days_seen, events, weeks)
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as out:
+            out.write(page)
+        print(f"Wrote {args.out}")
+    else:
+        print(page, end="")
     return 0
 
 

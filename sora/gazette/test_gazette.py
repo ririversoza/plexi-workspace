@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 from taro.tinytown import run_town
+from sora.gazette.edition import path, price_series, render_html
 from sora.gazette import (
     DAYS,
     NOT_REPORTED,
@@ -227,6 +228,58 @@ class Phase3SectionsTest(unittest.TestCase):
         self.assertEqual(headline(big, storm), "TOWN MOOD SINKS 10 POINTS")
         small = [day(1, residents={"avg_mood": 60}), day(2, residents={"avg_mood": 51})]
         self.assertEqual(headline(small, storm), "STORM SHUTS EVERY SHOP ON 1 DAY")
+
+
+class HtmlEditionTest(unittest.TestCase):
+    def page(self, days, events=()):
+        return render_html(days, list(events), [1])
+
+    def test_full_page_is_self_contained(self):
+        page = paper(["--html"])
+        self.assertTrue(page.startswith("<!doctype html>"))
+        self.assertEqual(page.count("<article"), WEEKS)
+        self.assertIn("The Tiny Town Gazette", page)
+        self.assertIn("prefers-color-scheme:dark", page)
+        self.assertIn('name="viewport"', page)
+        for outside in ("<script", "http://", "https://", "<link", "url(", " src=", "<img"):
+            self.assertNotIn(outside, page)
+
+    def test_out_writes_only_that_file(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            out = os.path.join(scratch, "gazette.html")
+            self.assertEqual(paper(["--html", "--week", "2", "--out", out]), f"Wrote {out}\n")
+            self.assertEqual(os.listdir(scratch), ["gazette.html"])
+            with open(out, encoding="utf-8") as page:
+                self.assertEqual(page.read().count("<article"), 1)
+
+    def test_out_needs_html(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            main(["--out", "x.html"])
+
+    def test_state_text_is_escaped(self):
+        days = phase2_week(lambda n: {"businesses": {"shops": {"x": {"name": "<b>Tea & Co</b>", "open": True}}}})
+        page = self.page(days)
+        self.assertIn("&lt;b&gt;Tea &amp; Co&lt;/b&gt;", page)
+        self.assertNotIn("<b>", page)
+
+    def test_sparklines_follow_their_keys(self):
+        self.assertNotIn('class="tile"', self.page(phase2_week()))
+        shops = lambda n: {"one-mug-tea": {"name": "One Mug Tea", "price_cents": 300 if n < 7 else 330}}
+        page = self.page(phase2_week(lambda n: {"residents": {"avg_mood": 50 + n}, "businesses": {"shops": shops(n)}}))
+        self.assertEqual(page.count('class="tile"'), 2)
+        self.assertIn('<div class="value">57<span class="delta">+6 this week', page)
+        self.assertIn('<div class="value">110.0%<span class="delta">+10.0 pts this week', page)
+
+    def test_price_series_is_relative_to_each_shops_first_price(self):
+        days = [
+            day(1, businesses={"shops": {"a": {"price_cents": 100}, "free": {"price_cents": 0}}}),
+            day(2),
+            day(3, businesses={"shops": {"a": {"price_cents": 120}, "b": {"price_cents": 50}}}),
+        ]
+        self.assertEqual(price_series(days), [(1, 100.0), (2, None), (3, 110.0)])
+
+    def test_sparkline_breaks_at_gaps(self):
+        self.assertEqual(path([(0, 1), None, (2, 3), (4, 5)]), "M0.0 1.0 M2.0 3.0 L4.0 5.0")
 
 
 if __name__ == "__main__":
