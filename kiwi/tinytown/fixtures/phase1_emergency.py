@@ -1,3 +1,4 @@
+# Frozen main 8ad2f2d4e73b2926c6f24e90660815773472fc1e; test reference only.
 """Bounded emergency demand with a shared police/fire response pool."""
 
 __all__ = ["System"]
@@ -12,37 +13,11 @@ _WEATHER = {
 }
 _CAPACITY = 8
 _MAX_ACCIDENTS = 1000
-_STREETS = ("Clover Lane", "Maple Street", "Orchard Road", "Willow Way")
 
 
 def _section(town, name):
     value = town.state.get(name)
     return value if type(value) is dict else {}
-
-
-def _street_breakdown(town, incidents):
-    """Apportion new calls by resident population, without randomness."""
-    people = _section(town, "residents").get("people")
-    if type(people) is not list:
-        return {}
-    population = dict.fromkeys(_STREETS, 0)
-    for person in people:
-        if type(person) is not dict:
-            continue
-        street = person.get("street")
-        if type(street) is str and street in population:
-            population[street] += 1
-    total = sum(population.values())
-    if not total:
-        return {}
-    counts = {street: incidents * population[street] // total for street in _STREETS}
-    start = (town.day - 1) % len(_STREETS)
-    rotation = _STREETS[start:] + _STREETS[:start]
-    ranked = sorted(rotation, key=lambda street: -(incidents * population[street] % total))
-    for street in ranked[:incidents - sum(counts.values())]:
-        counts[street] += 1
-    busiest = max(rotation, key=counts.get) if incidents else None
-    return {"incidents_by_street": counts, "busiest_street": busiest}
 
 
 class System:
@@ -78,19 +53,17 @@ class System:
         served = backlog_responded + responded
         self._backlog += incidents - served
         average = round(base_response + travel_penalty + served / _CAPACITY * 4, 2) if served else 0.0
-        summary = {
+        town.state[self.name] = {
             "incidents_today": incidents,
             "responded": responded,
             "avg_response_min": average,
             "open_incidents": self._backlog,
         }
-        town.state[self.name] = dict(summary)
-        town.state[self.name].update(_street_breakdown(town, incidents))
         town.emit(
             "emergency_summary",
             police_calls=police_calls,
             fire_calls=fire_calls,
             accident_calls=accidents,
             backlog_responded=backlog_responded,
-            **summary,
+            **town.state[self.name],
         )
