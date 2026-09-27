@@ -24,18 +24,20 @@ DEFAULT_DAYS = 90
 
 UNIT_COST = 1.80  # matcha, milk, cup, lid per finished latte
 LIST_PRICE = 5.50  # reference retail when demand is "normal"
-BASE_DAILY_DEMAND = 9.0  # expected drinks/day at list price
-MAX_DAILY_DEMAND = 24  # hard cap — cart foot traffic is bounded
+BASE_DAILY_DEMAND = 14.0  # expected drinks/day at list (office-plaza lunch)
+MAX_DAILY_DEMAND = 32  # hard cap — plaza foot traffic is bounded
 ELASTICITY = 1.25  # demand falls as price rises above list
 
 # Cart / equipment. A used bicycle coffee cart runs about $750 — more than the
-# $500 start — so day 1 buys only a small starter kit and rents the cart daily.
+# $500 start — so day 1 buys only a small starter kit and rents the cart daily
+# via a shared bike-cart co-op (PIP: prior $18 solo rental + quiet sidewalk
+# demand of 9 could not clear a ~10-drink break-even).
 CART_PURCHASE_PRICE = 750.0  # documented; not charged (unaffordable at start)
 STARTER_EQUIPMENT = 95.0  # whisks, bowls, thermos, cooler bag, chalkboard
-DAILY_CART_RENTAL = 18.00
-DAILY_PITCH_PERMIT = 12.00  # sidewalk / market pitch + permit share
-DAILY_FUEL = 4.00  # propane for hot water + light transport
-DAILY_INSURANCE = 3.00  # food-cart liability, ~$1,095/yr prorated
+DAILY_CART_RENTAL = 10.00  # co-op bike-cart share
+DAILY_PITCH_PERMIT = 14.00  # office-plaza pitch + permit share
+DAILY_FUEL = 3.00  # propane for hot water + short plaza commute
+DAILY_INSURANCE = 2.00  # food-cart liability, ~$730/yr prorated
 
 # Ordered so the ledger shows each overhead line separately.
 DAILY_OVERHEAD: tuple[tuple[str, float], ...] = (
