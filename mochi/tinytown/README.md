@@ -150,6 +150,28 @@ Draws each shop's `balance_cents` over the run as a 60-column by 12-row ASCII ch
 built it prints `history: businesses not built yet` and exits 0. An unknown shop id exits 2
 with the list of known ids. A shop missing on some days is charted from the days it exists.
 
+## Town map (`map.py`)
+
+```
+python3 -m mochi.tinytown.map --out PATH [--seed N] [--day N]
+```
+
+Writes one self-contained HTML page (inline CSS + SVG, no scripts or external assets) of
+day N, default the last day:
+- **Streets** from state, in name order: every resident's `street` plus the keys of
+  `emergency.incidents_by_street`, crossed by one avenue so they read as a grid. Each
+  street has one house per resident who lives there.
+- **Highlighted streets:** any street with incidents that day, or `emergency.busiest_street`.
+  Congestion is only reported town-wide, so it goes in the header line, not on a street.
+- **Shops** as buildings coloured by balance: red at $0 or below, green for the richest
+  shop that day, grey when the balance is unknown; closed shops are dashed and faded. Shops
+  have no street address in state, so they get their own block instead of an invented one.
+
+Light and dark follow `prefers-color-scheme`, and the SVG scales to the screen width, so
+it reads on a phone. It reads state only: no `town.rng` draws, the log is loaded with
+`csv_path=None`, and `--out` is the only file written. A bad `--out` (blank, a directory,
+or a missing folder) or `--day` outside 1-90 exits 2 before the town runs.
+
 ## Tests
 
 ```
@@ -168,6 +190,13 @@ storm and $0 days, the day-to-column mapping covering 0..59, clamping, all-zero,
 and gappy series, and `not built yet` or unknown-shop handling through a stand-in engine.
 With the engine it also checks that the same seed gives the same chart, another seed
 changes it, the rng state is untouched, and no files are written.
+`test_map.py` checks the snapshot (streets merged from homes and incidents, shop order,
+empty and malformed state), the balance colour scale (red at $0, green at the top), and
+the page: no scripts, links or external assets, dark-mode CSS, every label present, names
+escaped, hot and busiest streets marked, one house per resident. The CLI rejects bad
+`--out` and `--day` with exit 2 and writes nothing. With the engine it checks that only
+`--out` is written, the default day is the last, the same seed gives the same map, and the
+rng state and events match a run without the map.
 
 `test_log.py` uses a small fake `Town` that follows the contract interface (no engine needed) and
 covers:
