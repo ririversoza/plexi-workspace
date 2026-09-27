@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 90" width="120" height="90">
+  <!-- Nori desk: cheer megaphone + pom-poms  Team Cheerleader energy -->
+  <defs>
+    <radialGradient id="pomL" cx="40%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#ff8fab"/>
+      <stop offset="100%" stop-color="#ff4d6d"/>
+    </radialGradient>
+    <radialGradient id="pomR" cx="40%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#90e0ef"/>
+      <stop offset="100%" stop-color="#00b4d8"/>
+    </radialGradient>
+  </defs>
+
+  <!-- desk shadow -->
+  <ellipse cx="60" cy="82" rx="42" ry="5" fill="#000" opacity="0.08"/>
+
+  <!-- left pom-pom -->
+  <g transform="translate(18,58)">
+    <circle cx="0" cy="0" r="14" fill="url(#pomL)"/>
+    <circle cx="-8" cy="-6" r="7" fill="#ff4d6d"/>
+    <circle cx="7" cy="-7" r="6" fill="#ff758f"/>
+    <circle cx="-5" cy="7" r="6" fill="#ff758f"/>
+    <circle cx="6" cy="5" r="5" fill="#ff4d6d"/>
+    <line x1="0" y1="12" x2="0" y2="22" stroke="#c9184a" stroke-width="2" stroke-linecap="round"/>
+  </g>
+
+  <!-- right pom-pom -->
+  <g transform="translate(102,58)">
+    <circle cx="0" cy="0" r="14" fill="url(#pomR)"/>
+    <circle cx="-8" cy="-6" r="7" fill="#0077b6"/>
+    <circle cx="7" cy="-7" r="6" fill="#48cae4"/>
+    <circle cx="-5" cy="7" r="6" fill="#48cae4"/>
+    <circle cx="6" cy="5" r="5" fill="#0077b6"/>
+    <line x1="0" y1="12" x2="0" y2="22" stroke="#023e8a" stroke-width="2" stroke-linecap="round"/>
+  </g>
+
+  <!-- megaphone body -->
+  <path d="M28 42 L78 22 L78 58 L28 48 Z" fill="#ff6b35" stroke="#d62828" stroke-width="1.5" stroke-linejoin="round"/>
+  <ellipse cx="78" cy="40" rx="10" ry="18" fill="#ff9f1c" stroke="#d62828" stroke-width="1.5"/>
+  <rect x="18" y="40" width="12" height="10" rx="2" fill="#ef476f" stroke="#c9184a" stroke-width="1"/>
+  <!-- handle -->
+  <path d="M38 48 Q42 62 52 58" fill="none" stroke="#c9184a" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- TEAM banner on megaphone -->
+  <text x="52" y="44" text-anchor="middle" font-family="Verdana, Geneva, sans-serif" font-size="9" font-weight="700" fill="#fff">TEAM!</text>
+
+  <!-- sparkles / energy -->
+  <g fill="#ffd60a">
+    <polygon points="88,14 90,20 96,20 91,24 93,30 88,26 83,30 85,24 80,20 86,20"/>
+    <polygon points="105,32 106,35 109,35 107,37 108,40 105,38 102,40 103,37 101,35 104,35"/>
+    <polygon points="12,28 13,31 16,31 14,33 15,36 12,34 9,36 10,33 8,31 11,31"/>
+  </g>
+
+  <!-- name plate -->
+  <rect x="35" y="68" width="50" height="12" rx="6" fill="#fff" stroke="#ef476f" stroke-width="1.5"/>
+  <text x="60" y="77" text-anchor="middle" font-family="Verdana, Geneva, sans-serif" font-size="8" font-weight="700" fill="#ef476f">NORI </text>
+</svg>
