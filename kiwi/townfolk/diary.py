@@ -44,9 +44,17 @@ class Diary:
                     rid = person["id"]
                     purchases = tuple(diary.receipts.get(rid, ()))
                     spent = sum(price for _, price in purchases)
+                    tax = person.get("taxes_paid_cents", 0)
+                    rent = person.get("rent_paid_cents", 0)
+                    utilities = person.get("utilities_paid_cents", 0)
+                    benefit = person.get("benefit_received_cents", 0)
                     diary.rows[rid].append({
                         "day": town.day, "weather": condition, "job": person["job"],
-                        "wage_in": person["wallet_cents"] - before[rid] + spent,
+                        "wage_in": person["wallet_cents"] - before[rid] + spent
+                                   + tax + rent + utilities - benefit,
+                        "benefit_in": benefit,
+                        "tax_paid": tax, "rent_paid": rent,
+                        "utilities_paid": utilities,
                         "purchases": purchases, "wallet": person["wallet_cents"],
                         "mood": person.get("mood"),
                     })
@@ -74,13 +82,15 @@ class Diary:
     def render(self, person, seed):
         rows = self.rows[person["id"]]
         lines = [f"Diary: {person['name']} (#{person['id']}) | seed {seed}",
-                 "Day | Weather | Job | Wage in | Purchases (shop @ price) | Wallet after | Mood"]
+                 "Day | Weather | Job | Wage in | Benefit in | Purchases (shop @ price) | Wallet after | Mood"]
         for row in rows:
             purchases = ", ".join(f"{shop} @ {money(price)}" for shop, price in row["purchases"]) or "-"
             mood = row["mood"] if row["mood"] is not None else "n/a"
             lines.append(f"{row['day']:3} | {row['weather']} | {row['job'] or 'unemployed'} | "
-                         f"{money(row['wage_in'])} | {purchases} | {money(row['wallet'])} | {mood}")
+                         f"{money(row['wage_in'])} | {money(row.get('benefit_in', 0))} | "
+                         f"{purchases} | {money(row['wallet'])} | {mood}")
         earned = sum(row["wage_in"] for row in rows)
+        benefits = sum(row.get("benefit_in", 0) for row in rows)
         spent = sum(price for row in rows for _, price in row["purchases"])
         shops = Counter(shop for row in rows for shop, _ in row["purchases"])
         favourite = min(shops, key=lambda shop: (-shops[shop], shop)) if shops else "none"
@@ -89,7 +99,8 @@ class Diary:
         saddest = min(moods, key=lambda row: (row["mood"], row["day"])) if moods else None
         def mood_day(row):
             return f"day {row['day']} ({row['mood']})" if row else "n/a (mood unavailable)"
-        lines += [f"Total earned: {money(earned)} | Total spent: {money(spent)}",
+        lines += [f"Total earned: {money(earned)} | Total benefits: {money(benefits)} | "
+                  f"Total spent: {money(spent)}",
                   f"Favourite shop: {favourite}",
                   f"Happiest: {mood_day(happiest)} | Saddest: {mood_day(saddest)}"]
         return "\n".join(lines)

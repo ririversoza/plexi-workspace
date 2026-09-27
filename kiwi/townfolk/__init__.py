@@ -11,6 +11,10 @@ FIRST_NAMES = (
 LAST_NAMES = ("Ash", "Bell", "Chen", "Diaz", "Elm", "Fox", "Green", "Hill")
 STREETS = ("Clover Lane", "Maple Street", "Orchard Road", "Willow Way")
 WEEKDAY_WAGE_CENTS = 2000
+INCOME_TAX_PERCENT = 10
+DAILY_RENT_CENTS = 600
+DAILY_UTILITIES_CENTS = 150
+ARREARS_MOOD_PENALTY = 15
 HEALTHY_WALLET_CENTS = 10000
 STAFF_COUNTS = {shop: 2 if shop in ("bench-and-bell", "spoke-and-spanner") else 1
                 for shop in SHOP_IDS}
@@ -33,6 +37,8 @@ def _summarize(state):
     state["employed"] = sum(person["job"] is not None for person in people)
     state["avg_wallet_cents"] = (sum(person["wallet_cents"] for person in people) // len(people)
                                  if people else 0)
+    state["arrears_cents"] = sum(person["arrears_cents"] for person in people)
+    state["in_arrears"] = sum(person["arrears_cents"] > 0 for person in people)
 
 
 def _update_mood(state, bought_today, condition="sun"):
@@ -44,7 +50,9 @@ def _update_mood(state, bought_today, condition="sun"):
         wallet_points = min(40, _cents(person["wallet_cents"]) // 1000)
         employment_points = 10 if person["job"] is not None else -10
         purchase_points = 10 if person["id"] in bought_today else 0
-        mood = max(0, min(100, 40 + wallet_points + employment_points + purchase_points - penalty))
+        arrears_penalty = ARREARS_MOOD_PENALTY if _cents(person.get("arrears_cents")) else 0
+        mood = max(0, min(100, 40 + wallet_points + employment_points + purchase_points
+                           - penalty - arrears_penalty))
         person["mood"] = mood
         total += mood
         bands["happy" if mood >= 70 else "ok" if mood >= 40 else "unhappy"] += 1
@@ -66,10 +74,16 @@ class System:
         town.rng.shuffle(jobs)
         people = [
             {"id": index + 1, "name": name, "street": town.rng.choice(STREETS),
-             "job": jobs[index], "wallet_cents": town.rng.randint(2000, 10000)}
+             "job": jobs[index], "wallet_cents": town.rng.randint(2000, 10000),
+             "rent_arrears_cents": 0, "utility_arrears_cents": 0,
+             "arrears_cents": 0, "taxes_paid_cents": 0,
+             "rent_paid_cents": 0, "utilities_paid_cents": 0,
+             "benefit_received_cents": 0}
             for index, name in enumerate(names)
         ]
-        state = {"people": people, "purchases": {}, "spent_cents": {}}
+        state = {"people": people, "purchases": {}, "spent_cents": {},
+                 "taxes_paid_cents": 0, "rent_paid_cents": 0, "bills_paid_cents": 0,
+                 "benefits_received_cents": 0}
         _summarize(state)
         _update_mood(state, set())
         town.state[self.name] = state
@@ -77,6 +91,8 @@ class System:
     def tick(self, town):
         state = town.state[self.name]
         businesses = _mapping(town.state.get("businesses"))
+        economy = _mapping(town.state.get("economy"))
+        benefit = _cents(economy.get("benefit_per_head_cents"))
         wages = _mapping(businesses.get("wages_paid"))
         shops = _mapping(businesses.get("shops"))
         weather = _mapping(town.state.get("weather"))
@@ -93,11 +109,41 @@ class System:
                 stock[shop_id] = _cents(shop.get("available"))
                 prices[shop_id] = price
         people = list(state["people"])
-        # Credit every wallet before anyone shops; never write business state.
+        # Settle wages and fixed obligations before the shopping RNG is touched.
         for person in people:
-            person["wallet_cents"] += _cents(wages.get(person["id"]))
+            wage = _cents(wages.get(person["id"]))
             if weekday and person["job"] == "out-of-town":
-                person["wallet_cents"] += WEEKDAY_WAGE_CENTS
+                wage += WEEKDAY_WAGE_CENTS
+            tax = wage * INCOME_TAX_PERCENT // 100
+            person["wallet_cents"] += wage - tax
+            person["benefit_received_cents"] = benefit if person["job"] is None else 0
+            person["wallet_cents"] += person["benefit_received_cents"]
+            person["taxes_paid_cents"] = tax
+            person["rent_paid_cents"] = 0
+            person["utilities_paid_cents"] = 0
+
+            # Older debt takes priority; partial arrears payments avoid idle cash.
+            for owed_key, paid_key in (("rent_arrears_cents", "rent_paid_cents"),
+                                       ("utility_arrears_cents", "utilities_paid_cents")):
+                paid = min(person["wallet_cents"], person[owed_key])
+                person["wallet_cents"] -= paid
+                person[owed_key] -= paid
+                person[paid_key] += paid
+
+            for amount, owed_key, paid_key, kind in (
+                    (DAILY_RENT_CENTS, "rent_arrears_cents", "rent_paid_cents", "missed_rent"),
+                    (DAILY_UTILITIES_CENTS, "utility_arrears_cents", "utilities_paid_cents", "missed_bill")):
+                if person["wallet_cents"] >= amount:
+                    person["wallet_cents"] -= amount
+                    person[paid_key] += amount
+                else:
+                    person[owed_key] += amount
+                    town.emit(kind, resident_id=person["id"], amount_cents=amount)
+            person["arrears_cents"] = person["rent_arrears_cents"] + person["utility_arrears_cents"]
+        state["taxes_paid_cents"] = sum(person["taxes_paid_cents"] for person in people)
+        state["rent_paid_cents"] = sum(person["rent_paid_cents"] for person in people)
+        state["bills_paid_cents"] = sum(person["utilities_paid_cents"] for person in people)
+        state["benefits_received_cents"] = sum(person["benefit_received_cents"] for person in people)
         town.rng.shuffle(people)
         for person in people:
             if town.rng.random() >= chance:

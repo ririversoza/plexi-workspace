@@ -55,7 +55,9 @@ class DiaryTests(unittest.TestCase):
                     expected_wages += 2000
                 self.assertEqual(row["wage_in"], expected_wages)
                 spent = sum(price for _, price in row["purchases"])
-                self.assertEqual(row["wallet"], wallet + expected_wages - spent)
+                self.assertEqual(row["wallet"], wallet + expected_wages - spent
+                                 - row["tax_paid"] - row["rent_paid"]
+                                 - row["utilities_paid"] + row["benefit_in"])
                 wallet = row["wallet"]
                 for _, price in row["purchases"]:
                     self.assertEqual(price, row["day"] * 10 + 100)
@@ -116,7 +118,7 @@ class DiaryTests(unittest.TestCase):
              "purchases": ((shop, 50),), "wallet": 1000, "mood": mood}
             for day, shop, mood in ((1, "z-shop", 60), (2, "a-shop", 60), (3, "b-shop", 20))]
         text = diary.render(person, 42)
-        self.assertIn("Total earned: $3.00 | Total spent: $1.50", text)
+        self.assertIn("Total earned: $3.00 | Total benefits: $0.00 | Total spent: $1.50", text)
         self.assertIn("Favourite shop: a-shop", text)
         self.assertIn("Happiest: day 1 (60) | Saddest: day 3 (20)", text)
 
