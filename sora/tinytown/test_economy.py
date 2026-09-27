@@ -141,7 +141,7 @@ class TaxesTest(unittest.TestCase):
             businesses={"taxes_paid_cents": {"fold-post": 105, "matcha-mile": 0}, "bills_paid_cents": 800},
         )
         self.assertEqual((eco["tax_income"], eco["utility_income"]), (13.39, 188.0))
-        self.assertEqual(eco["treasury"], 946.39)  # 1000 + 201.39 - 120 upkeep - 18 x 7.50 benefits
+        self.assertEqual(eco["treasury"], 850.39)  # 1000 + 201.39 - 120 x 1.80 upkeep - 18 x 7.50 benefits
 
     def test_each_source_falls_back_on_its_own(self):
         residents_only = self.day_one(residents={"taxes_paid_cents": 500, "bills_paid_cents": 0})
@@ -153,7 +153,7 @@ class TaxesTest(unittest.TestCase):
         zero = {"taxes_paid_cents": 0, "bills_paid_cents": 0}
         eco = self.day_one(residents=zero, businesses=zero)
         self.assertEqual((eco["tax_income"], eco["utility_income"]), (0.0, 0.0))
-        self.assertEqual(eco["treasury"], 745.0)  # 1000 - 120 upkeep - 135 benefits; no project below the reserve
+        self.assertEqual(eco["treasury"], 649.0)  # 1000 - 216 upkeep - 135 benefits; no project below the reserve
 
     def test_malformed_amounts_count_as_zero_never_conjured(self):
         for bad in (-500, True, "500", 5.5, None, [500], {"a": -1, "b": "x"}):
@@ -167,15 +167,15 @@ class TaxesTest(unittest.TestCase):
     def test_treasury_gets_exactly_what_was_paid(self):
         """Conservation: over 90 days the treasury moves by what was paid in, minus upkeep and benefits, to the cent."""
         paid = lambda day: {
-            "residents": {**self.PEOPLE, "taxes_paid_cents": 1000 + day, "bills_paid_cents": 28000 - day},
+            "residents": {**self.PEOPLE, "taxes_paid_cents": 1000 + day, "bills_paid_cents": 38000 - day},
             "businesses": {"open_count": 6, "taxes_paid_cents": {"a": 37 * day}, "bills_paid_cents": 1200},
         }
         with mock.patch("sora.tinytown.PROJECTS", ()):
             towns = [town.state["economy"] for town in run(others=paid)]
-        received = sum(1000 + d + 28000 - d + 37 * d + 1200 for d in range(1, 91))
+        received = sum(1000 + d + 38000 - d + 37 * d + 1200 for d in range(1, 91))
         benefits = sum(eco["benefits_paid_cents"] for eco in towns)
         self.assertEqual(benefits, 90 * 18 * 750)  # never short here
-        self.assertEqual(round(towns[-1]["treasury"] * 100), 100_000 + received - 90 * 120 * 100 - benefits)
+        self.assertEqual(round(towns[-1]["treasury"] * 100), 100_000 + received - 90 * 21_600 - benefits)  # upkeep 120 x $1.80
 
     def test_no_rng_draws_and_no_overdraft_with_real_keys(self):
         zero = {"taxes_paid_cents": 0, "bills_paid_cents": 0}
@@ -189,6 +189,12 @@ class TaxesTest(unittest.TestCase):
         eco = self.day_one(residents={"taxes_paid_cents": 0})
         self.assertEqual((eco["benefits_paid_cents"], eco["benefit_per_head_cents"]), (18 * 750, 750))
 
+    def test_phase4_upkeep_only_with_real_resident_taxes(self):
+        fallback = self.day_one(businesses={"taxes_paid_cents": 0, "bills_paid_cents": 0})
+        self.assertEqual(fallback["treasury"], 1000.0 + 102.0 - 120.0)  # $1.00 upkeep; below the reserve, no project
+        real = self.day_one(residents={"taxes_paid_cents": 0, "bills_paid_cents": 0})
+        self.assertEqual(real["treasury"], 1000.0 + 20.0 - 216.0 - 135.0)  # $1.80 upkeep, benefits
+
     def test_no_benefits_without_phase4_residents(self):
         self.assertEqual(self.day_one()["benefits_paid_cents"], 0)  # nobody would credit them
         self.assertEqual(self.day_one(businesses={"taxes_paid_cents": 0})["benefits_paid_cents"], 0)
@@ -197,7 +203,7 @@ class TaxesTest(unittest.TestCase):
         town = FakeTown()
         economy = System()
         economy.setup(town)
-        town.state["economy"]["treasury"] = 120.0 + 100.0  # upkeep, then $100 for 18 people
+        town.state["economy"]["treasury"] = 216.0 + 100.0  # Phase 4 upkeep, then $100 for 18 people
         town.state["residents"] = {**self.PEOPLE, "taxes_paid_cents": 0, "bills_paid_cents": 0}
         town.state["businesses"] = {"open_count": 6, "taxes_paid_cents": 0, "bills_paid_cents": 0}
         economy.tick(town)

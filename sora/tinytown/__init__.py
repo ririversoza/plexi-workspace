@@ -11,7 +11,8 @@ DAILY_ARRIVALS = (-2, 3)        # inclusive range of daily population change
 EMPLOYMENT_RATE = (0.85, 0.95)  # daily employment rate is drawn from this range
 TAX_PER_WORKER = 1.0  # fallback only: conjured income when residents don't report taxes
 TAX_PER_SHOP = 5.0    # fallback only: the same for businesses
-UPKEEP_PER_RESIDENT = 1.0
+UPKEEP_PER_RESIDENT = 1.0          # with the conjured fallback income
+PHASE4_UPKEEP_PER_RESIDENT = 1.80  # once residents pay real taxes (Juniper-approved, 2026-09-27)
 
 # Phase 4: today's int cents paid to the town (arrears paid today included), reported by
 # residents and businesses. bills_paid_cents is the treasury-bound share only (utilities,
@@ -145,14 +146,15 @@ class System:
 
         tax_income, utility_income = _income(town, employed, shops_open)
         available = prev["treasury"] + tax_income + utility_income
-        upkeep = population * UPKEEP_PER_RESIDENT
+        phase4 = _paid(town, "residents") is not None  # a Phase 4 residents system pays taxes and credits benefits
+        upkeep = population * (PHASE4_UPKEEP_PER_RESIDENT if phase4 else UPKEEP_PER_RESIDENT)
         spent = min(upkeep, available)  # no overdraft: never spend money we don't have
         if spent < upkeep:
             town.emit("budget_shortfall", needed=upkeep, spent=spent)
 
         treasury = round(available - spent, 2)
         per_head = benefits = 0
-        if _paid(town, "residents") is not None:  # only a Phase 4 residents system credits benefits
+        if phase4:
             treasury, per_head, benefits = _benefits(town, population - employed, treasury)
         treasury, project, completed = _public_works(town, prev, treasury)
 
