@@ -2,6 +2,8 @@
 
 Contract: juniper/TINYTOWN.md — all systems share one seeded RNG, emit through
 Town, and tick in a fixed order. Missing systems are simply skipped.
+
+Phase 2 adds businesses and residents to the catalog and tick order.
 """
 
 from __future__ import annotations
@@ -12,12 +14,21 @@ from typing import Any, Callable, Iterable, Optional, Protocol
 DEFAULT_SEED = 42
 DEFAULT_DAYS = 90
 
-# Daily tick order from the contract. "log" sets up (and may subscribe) but does not tick.
-TICK_ORDER = ("weather", "economy", "traffic", "emergency")
+# Daily tick order (Phase 2). "log" sets up (and may subscribe) but does not tick.
+TICK_ORDER = (
+    "weather",
+    "businesses",
+    "residents",
+    "economy",
+    "traffic",
+    "emergency",
+)
 
 # Catalog of packages that may export System. Import failures mean "not installed".
 SYSTEM_MODULES = {
     "weather": "nori.tinytown",
+    "businesses": "nori.shops",
+    "residents": "kiwi.townfolk",
     "economy": "sora.tinytown",
     "traffic": "bao.tinytown",
     "emergency": "kiwi.tinytown",
@@ -68,6 +79,17 @@ class Town:
         self._subscribers.append(callback)
 
 
+def _setup_order(installed_names: Iterable[str]) -> list[str]:
+    """Setup follows TICK_ORDER, then any leftover systems (e.g. log)."""
+    names = list(installed_names)
+    present = set(names)
+    ordered: list[str] = [name for name in TICK_ORDER if name in present]
+    for name in names:
+        if name not in ordered:
+            ordered.append(name)
+    return ordered
+
+
 def run_town(
     systems: Iterable[SystemProtocol],
     *,
@@ -77,15 +99,16 @@ def run_town(
 ) -> Town:
     """Set up every system once, then run ``days`` ticks in ``TICK_ORDER``.
 
-    Systems whose ``name`` is not in ``TICK_ORDER`` still receive ``setup``
-    (e.g. Mochi's log) but are skipped during the daily loop. Unknown or
-    missing names never crash the run.
+    Setup order matches ``TICK_ORDER``, then any remaining systems (e.g. Mochi's
+    log). Systems whose ``name`` is not in ``TICK_ORDER`` still receive ``setup``
+    but are skipped during the daily loop. Unknown or missing names never crash.
     """
     installed = list(systems)
     by_name = {system.name: system for system in installed}
     town = Town(seed=seed)
 
-    for system in installed:
+    for name in _setup_order(system.name for system in installed):
+        system = by_name[name]
         town._current_system = system.name
         system.setup(town)
     town._current_system = None
