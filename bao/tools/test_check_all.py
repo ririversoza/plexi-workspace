@@ -68,6 +68,29 @@ class ImportPathTests(unittest.TestCase):
             tests, status, _, output = run_suite(root, suite)
             self.assertEqual((tests, status), (1, "PASS"), output)
 
+    def test_plain_folder_precedes_installed_package(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            folder = root / "agent" / "business"
+            folder.mkdir(parents=True)
+            installed = root / "installed" / "site-packages"
+            installed.mkdir(parents=True)
+            (installed / "local_helper.py").write_text("VALUE = 'installed'\n")
+            (folder / "local_helper.py").write_text("VALUE = 'local'\n")
+            (root / "sitecustomize.py").write_text(
+                "import site\n"
+                f"site.addsitedir({str(installed)!r})\n"
+            )
+            (folder / "test_local.py").write_text(
+                "import unittest\nfrom local_helper import VALUE\n"
+                "class LocalTests(unittest.TestCase):\n"
+                "    def test_value(self):\n"
+                "        self.assertEqual(VALUE, 'local')\n"
+            )
+            suite, = discover_suites(root)
+            tests, status, _, output = run_suite(root, suite)
+            self.assertEqual((tests, status), (1, "PASS"), output)
+
 
 class WorkerResultTests(unittest.TestCase):
     def run_source(self, source, **kwargs):
