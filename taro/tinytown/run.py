@@ -478,22 +478,31 @@ def count_events_by_kind(town: Town) -> Dict[str, int]:
     return counts
 
 
-def validate_export_path(path: str) -> None:
-    """Reject empty paths and missing parent directories before the town runs.
+# Underscore aliases so dashboard can import without copying the schema helpers.
+_load_systems = load_systems
+_snapshot_day = snapshot_day
+_count_events_by_kind = count_events_by_kind
+
+
+def validate_export_path(path: str, *, flag: str = "--export") -> None:
+    """Reject empty paths, existing directories, and missing parents up front.
 
     Raises ``ValueError`` with a clear message on failure. Parent ``.`` (cwd)
-    and an empty parent (bare filename) are allowed.
+    and an empty parent (bare filename) are allowed. ``flag`` customises the
+    message prefix so callers like the dashboard can reuse this for ``--out``.
     """
     if path is None or not str(path).strip():
-        raise ValueError("--export path must not be empty")
+        raise ValueError(f"{flag} path must not be empty")
     target = Path(path)
+    if target.exists() and target.is_dir():
+        raise ValueError(f"{flag} path is an existing directory: {target}")
     parent = target.parent
     if str(parent) in ("", "."):
         return
     if not parent.exists():
-        raise ValueError(f"--export parent directory does not exist: {parent}")
+        raise ValueError(f"{flag} parent directory does not exist: {parent}")
     if not parent.is_dir():
-        raise ValueError(f"--export parent is not a directory: {parent}")
+        raise ValueError(f"{flag} parent is not a directory: {parent}")
 
 
 def build_timeline(
@@ -600,7 +609,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--export",
         metavar="PATH",
         default=None,
-        help="write a compact JSON timeline to PATH (stdout unchanged)",
+        help=(
+            "write a compact JSON timeline to PATH (disables event-log CSV; "
+            "daily lines and final report still print; incompatible with --seeds)"
+        ),
     )
     return parser
 
@@ -614,6 +626,12 @@ def cli(argv: Optional[Sequence[str]] = None) -> Any:
     """CLI entry: default argv preserves today's plain-run stdout."""
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.seeds is not None and args.export is not None:
+        print(
+            "error: --seeds cannot be combined with --export",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     if args.export is not None:
         try:
             validate_export_path(args.export)

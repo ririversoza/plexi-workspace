@@ -604,6 +604,14 @@ class ExportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_export_path("/no/such/parent/dir/out.json")
 
+    def test_validate_export_path_rejects_existing_directory(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(dir=__import__("os").environ.get("TMPDIR")) as tmp:
+            with self.assertRaises(ValueError) as ctx:
+                validate_export_path(tmp)
+            self.assertIn("directory", str(ctx.exception).lower())
+
     def test_cli_export_bad_path_exits_2_before_run(self) -> None:
         import taro.tinytown.run as run_mod
 
@@ -625,13 +633,51 @@ class ExportTests(unittest.TestCase):
                 cli(["--export", "/no/such/parent/town.json", "--days", "1"])
             self.assertEqual(ctx2.exception.code, 2)
             self.assertEqual(called["n"], 0)
+
+            import tempfile
+
+            with tempfile.TemporaryDirectory(dir=__import__("os").environ.get("TMPDIR")) as tmp:
+                with self.assertRaises(SystemExit) as ctx3:
+                    cli(["--export", tmp, "--days", "1"])
+                self.assertEqual(ctx3.exception.code, 2)
+                self.assertEqual(called["n"], 0)
         finally:
             run_mod.load_systems = original
+
+    def test_cli_seeds_with_export_exits_2(self) -> None:
+        import taro.tinytown.run as run_mod
+
+        original = run_mod.load_systems
+        original_seeds = run_mod.run_seeds_report
+        called = {"load": 0, "seeds": 0}
+
+        def fake_load(**_kwargs):
+            called["load"] += 1
+            return []
+
+        def fake_seeds(*_args, **_kwargs):
+            called["seeds"] += 1
+            return "table", []
+
+        run_mod.load_systems = fake_load
+        run_mod.run_seeds_report = fake_seeds
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                cli(["--seeds", "1-2", "--export", "/tmp/town.json"])
+            self.assertEqual(ctx.exception.code, 2)
+            self.assertEqual(called["load"], 0)
+            self.assertEqual(called["seeds"], 0)
+            help_text = run_mod.build_parser().format_help()
+            self.assertNotIn("stdout unchanged", help_text)
+            self.assertIn("disables event-log", help_text)
+        finally:
+            run_mod.load_systems = original
+            run_mod.run_seeds_report = original_seeds
 
     def test_write_timeline_exact_path(self) -> None:
         import tempfile
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(dir=__import__("os").environ.get("TMPDIR")) as tmp:
             path = str(Path(tmp) / "nested" / "town.json")
             Path(tmp, "nested").mkdir()
             write_timeline(
