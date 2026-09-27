@@ -71,5 +71,23 @@ python3 -m taro.tinytown.run
 # or
 python3 taro/tinytown/run.py
 
+# Phase 3 CLI (no flags → same stdout bytes as the plain run above)
+python3 -m taro.tinytown.run --seed 42 --days 90
+python3 -m taro.tinytown.run --quiet
+python3 -m taro.tinytown.run --seeds 1-20
+
 python3 -m unittest discover -s taro/tinytown -t .
 ```
+
+### CLI flags
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--seed N` | `42` | RNG seed for a single run |
+| `--days N` | `90` | simulation length |
+| `--quiet` | off | final report only (no daily lines) |
+| `--seeds A-B` | off | quiet multi-seed robustness table |
+
+`--seeds` disables log file writes (`csv_path=None`), tracks max consecutive `$0` shop balances with a read-only feature (no extra `town.rng` draws), and prints one row per seed: seed, shops with balance > 0 on the last day, max `$0` streak, average wallet, treasury, PASS/FAIL against Phase 2 targets (≥5 shops solvent, max `$0` streak ≤3, avg wallet < $600), then `X of N seeds pass`.
+
+Scratch and run output belong in `$TMPDIR`, never in the repo.
