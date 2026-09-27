@@ -331,15 +331,32 @@ def run_seed_metrics(
     *,
     days: int = DEFAULT_DAYS,
 ) -> Dict[str, Any]:
-    """Run one quiet seed with log files disabled; return robustness metrics."""
+    """Run one quiet seed with log files disabled; return robustness metrics.
+
+    Also records per-day ``avg_wallet_series_cents`` and ``shops_open_series``
+    (solvent shops with ``balance_cents > 0``) so the dashboard can draw
+    small-multiples without reimplementing the seed loop.
+    """
     systems = load_systems(disable_log_files=True)
     units_sold: Dict[str, int] = {}
     zero_current: Dict[str, int] = {}
     zero_max: Dict[str, int] = {}
+    avg_wallet_series: List[Optional[int]] = []
+    shops_open_series: List[int] = []
 
     def on_day(town: Town) -> None:
+        balances = shops_with_balance(town)
         _accumulate_sales(town, units_sold)
-        _update_zero_streaks(shops_with_balance(town), zero_current, zero_max)
+        _update_zero_streaks(balances, zero_current, zero_max)
+        shops_open_series.append(sum(1 for balance in balances.values() if balance > 0))
+        residents = town.state.get("residents")
+        if isinstance(residents, dict) and residents.get("avg_wallet_cents") is not None:
+            try:
+                avg_wallet_series.append(int(residents["avg_wallet_cents"]))
+            except (TypeError, ValueError):
+                avg_wallet_series.append(None)
+        else:
+            avg_wallet_series.append(None)
 
     town = run_town(systems, days=days, seed=seed, on_day=on_day)
     balances = shops_with_balance(town)
@@ -367,6 +384,8 @@ def run_seed_metrics(
         "systems": systems,
         "units_sold": units_sold,
         "zero_max_by_shop": dict(zero_max),
+        "avg_wallet_series_cents": avg_wallet_series,
+        "shops_open_series": shops_open_series,
     }
 
 
@@ -413,6 +432,8 @@ def run_seeds_report(
             "treasury": row["treasury"],
             "pass": row["pass"],
             "zero_max_by_shop": row["zero_max_by_shop"],
+            "avg_wallet_series_cents": row["avg_wallet_series_cents"],
+            "shops_open_series": row["shops_open_series"],
         }
         for row in rows
     ]

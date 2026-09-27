@@ -21,6 +21,7 @@ from taro.tinytown.dashboard import (
     main,
     parse_args,
     render_html,
+    render_seeds_html,
     write_dashboard,
 )
 
@@ -235,6 +236,106 @@ class DashboardTests(unittest.TestCase):
             write_dashboard(path, _tiny_timeline())
             text = Path(path).read_text()
             self.assertIn("<svg", text)
+
+    def test_parse_seeds_flag(self) -> None:
+        args = parse_args(["--out", "/tmp/x.html", "--seeds", "1-3"])
+        self.assertEqual(list(args.seeds), [1, 2, 3])
+
+    def test_cli_seeds_with_from_exits_2(self) -> None:
+        with self.assertRaises(SystemExit) as ctx:
+            cli(["--out", "/tmp/x.html", "--seeds", "1-2", "--from", "/tmp/t.json"])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_render_seeds_html_small_multiples_and_grid(self) -> None:
+        rows = [
+            {
+                "seed": 1,
+                "shops_open": 6,
+                "max_zero_streak": 0,
+                "avg_wallet_cents": 40000,
+                "treasury": 1000.0,
+                "pass": True,
+                "avg_wallet_series_cents": [30000, 35000, 40000],
+                "shops_open_series": [6, 6, 6],
+            },
+            {
+                "seed": 2,
+                "shops_open": 4,
+                "max_zero_streak": 5,
+                "avg_wallet_cents": 70000,
+                "treasury": 900.0,
+                "pass": False,
+                "avg_wallet_series_cents": [50000, 60000, 70000],
+                "shops_open_series": [6, 5, 4],
+            },
+        ]
+        html = render_seeds_html(rows, days=3, seed_lo=1, seed_hi=2)
+        lower = html.lower()
+        self.assertIn("<!doctype html>", lower)
+        self.assertIn("prefers-color-scheme", html)
+        self.assertIn("Average wallet by seed", html)
+        self.assertIn("Shops open by seed", html)
+        self.assertIn("PASS / FAIL grid", html)
+        self.assertIn("1 of 2 seeds pass", html)
+        self.assertIn("seed 1", html)
+        self.assertIn("seed 2", html)
+        self.assertIn("PASS", html)
+        self.assertIn("FAIL", html)
+        self.assertIn("<svg", lower)
+        self.assertIn("multiples", html)
+        self.assertNotIn("<script", lower)
+        self.assertNotIn("http", lower)
+        self.assertEqual(render_seeds_html(rows, days=3, seed_lo=1, seed_hi=2), html)
+
+    def test_seeds_page_reuses_run_seeds_report(self) -> None:
+        called = {"n": 0}
+
+        def fake_report(seeds, *, days=90):
+            called["n"] += 1
+            self.assertEqual(list(seeds), [1, 2])
+            self.assertEqual(days, 2)
+            return "table", [
+                {
+                    "seed": 1,
+                    "shops_open": 6,
+                    "max_zero_streak": 0,
+                    "avg_wallet_cents": 1000,
+                    "treasury": 1,
+                    "pass": True,
+                    "avg_wallet_series_cents": [1000, 1000],
+                    "shops_open_series": [6, 6],
+                },
+                {
+                    "seed": 2,
+                    "shops_open": 6,
+                    "max_zero_streak": 0,
+                    "avg_wallet_cents": 1100,
+                    "treasury": 1,
+                    "pass": True,
+                    "avg_wallet_series_cents": [1100, 1100],
+                    "shops_open_series": [6, 6],
+                },
+            ]
+
+        original = dash.run_seeds_report
+        dash.run_seeds_report = fake_report
+        try:
+            with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as tmp:
+                out = str(Path(tmp) / "seeds.html")
+                html = main(out=out, seeds=range(1, 3), days=2)
+                self.assertEqual(called["n"], 1)
+                self.assertTrue(Path(out).is_file())
+                self.assertEqual(Path(out).read_text(), html)
+                self.assertIn("Average wallet by seed", html)
+                self.assertEqual({p.name for p in Path(tmp).iterdir()}, {"seeds.html"})
+        finally:
+            dash.run_seeds_report = original
+
+    def test_run_seed_metrics_includes_series(self) -> None:
+        row = run.run_seed_metrics(1, days=2)
+        self.assertEqual(len(row["avg_wallet_series_cents"]), 2)
+        self.assertEqual(len(row["shops_open_series"]), 2)
+        self.assertEqual(row["shops_open_series"][-1], row["shops_open"])
 
 
 if __name__ == "__main__":
