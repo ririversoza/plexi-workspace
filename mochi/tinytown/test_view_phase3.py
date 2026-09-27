@@ -61,6 +61,11 @@ class ByteIdenticalTest(unittest.TestCase):
 
 
 class MoodTest(unittest.TestCase):
+    def test_regression_non_string_band_keys(self):
+        # Bao's review: mood_bands={1: 2} raised KeyError.
+        state = with_keys("residents", avg_mood=50, mood_bands={1: 2, "happy": 3, None: 1})
+        self.assertEqual(line_with(view.render(state, 1), "mood:"), "  mood: avg 50/100 | happy 3 | 1 2 | None 1")
+
     def test_avg_and_bands_in_contract_order(self):
         state = with_keys("residents", avg_mood=58, mood_bands={"unhappy": 19, "happy": 56, "ok": 45})
         self.assertEqual(line_with(view.render(state, 1), "mood:"), "  mood: avg 58/100 | happy 56 | ok 45 | unhappy 19")
@@ -80,8 +85,10 @@ class MoodTest(unittest.TestCase):
 
 
 class PriceArrowTest(unittest.TestCase):
-    def status_line(self, state, shop_name="Fold Post"):
-        rows = view.render(state, 1).splitlines()
+    BASE = {"fold-post": 800, "one-mug-tea": 325}  # what run() observes on day 1
+
+    def status_line(self, state, shop_name="Fold Post", base_prices=BASE):
+        rows = view.render(state, 1, base_prices=base_prices).splitlines()
         index = next(i for i, row in enumerate(rows) if shop_name in row)
         col = rows[index].index(shop_name)
         return rows[index + 1][col:col + view.BOX_INNER]
@@ -96,13 +103,28 @@ class PriceArrowTest(unittest.TestCase):
         self.assertEqual(self.status_line(self.set_price(760)).rstrip(), "OPEN    $7.60 each ↓")
         self.assertEqual(self.status_line(self.set_price(800)).rstrip(), "OPEN    $8.00 each")
 
-    def test_state_base_price_wins_over_catalog(self):
+    def test_state_base_price_wins_over_observed(self):
         self.assertIn("↓", self.status_line(self.set_price(800, base_price_cents=900)))
+        # With no observed baseline at all, the shop's own base still enables the arrow.
+        self.assertIn("↓", self.status_line(self.set_price(800, base_price_cents=900), base_prices=None))
 
-    def test_unknown_shop_or_price_gets_no_arrow(self):
-        self.assertEqual(view.price_arrow("mystery-shop", {"price_cents": 999}), "")
-        self.assertEqual(view.price_arrow("fold-post", {"price_cents": None}), "")
-        self.assertEqual(view.price_arrow("fold-post", {}), "")
+    def test_regression_no_arrow_without_a_known_base(self):
+        # Bao's review: a fake state with price_cents=801 and no Phase 3 data showed "↑".
+        self.assertNotIn(view.PRICE_UP, view.render(self.set_price(801), 1))
+        self.assertEqual(self.status_line(self.set_price(801), base_prices=None).rstrip(), "OPEN    $8.01 each")
+        self.assertEqual(self.status_line(self.set_price(801), base_prices={}).rstrip(), "OPEN    $8.01 each")
+
+    def test_unknown_or_odd_prices_get_no_arrow(self):
+        self.assertEqual(view.price_arrow({"price_cents": 999}), "")
+        self.assertEqual(view.price_arrow({"price_cents": None}, 800), "")
+        self.assertEqual(view.price_arrow({}, 800), "")
+        self.assertEqual(view.price_arrow({"price_cents": 900}, "800"), "")
+
+    def test_first_day_prices_is_the_run_baseline(self):
+        self.assertEqual(view.first_day_prices(fake_state()), {"fold-post": 800, "one-mug-tea": 325})
+        self.assertEqual(view.first_day_prices({}), {})
+        odd = {"businesses": {"shops": {"a": {"price_cents": True}, "b": "x", "c": {"price_cents": 5}}}}
+        self.assertEqual(view.first_day_prices(odd), {"c": 5})
 
     def test_widest_arrow_still_fits_the_box(self):
         state = fake_state()

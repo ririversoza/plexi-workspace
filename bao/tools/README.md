@@ -22,15 +22,22 @@ module names, matching the READMEs' repository-root unittest discovery. Plain
 folders use local module names, matching discovery without `-t .`. Package suites use only the repo root on the child import path, preventing
 modules such as `mochi/tinytown/inspect.py` from shadowing the standard library.
 Plain folders and legacy direct-agent suites (such as Bao's roster tests) also
-add their own folder to support local imports such as `business`, `run` and
+append their own folder after standard-library paths to support local imports such as `business`, `run` and
 `roster`. Each subprocess keeps these local imports isolated from other suites.
 
 Each child gets a fresh working directory under `$TMPDIR` (or the platform temp
 directory when unset). Its `TMPDIR`, `TMP`, and `TEMP` point there too. Temporary
 trees are removed on completion, failure or timeout. Output is captured in memory;
-only failures print full diagnostics. No run-output files are created in the repo.
+only failures print diagnostics. Timeout diagnostics preserve the last 4,000
+characters of each captured stream, including byte output decoded safely. No run-output files are created in the repo.
 This isolates ordinary relative and tempfile writes; it is not a sandbox against
 a test explicitly writing to an absolute source path.
+
+Worker counts and status are read from a result file inside the disposable
+directory, never from stdout markers. Missing or malformed results fail closed;
+a child exit code of zero alone is insufficient. This prevents ordinary test
+output from forging success, but is not a security boundary against hostile
+tests with access to the child process and filesystem.
 
 The table reports suite, tests executed, PASS/FAIL/SKIP, skipped count when present,
 and wall-clock seconds. An entirely skipped suite is SKIP; mixed passing/skipped

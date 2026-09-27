@@ -4,11 +4,13 @@ Read-only: works from ``town.state`` snapshots, never touches ``town.rng`` or em
 Used by ``python3 -m mochi.tinytown.view --history <shop_id|all>``.
 """
 
+import math
+from fractions import Fraction
 from typing import NamedTuple, Optional
 
 CHART_COLUMNS = 60
 CHART_ROWS = 12
-Y_LABEL_WIDTH = 12
+Y_LABEL_WIDTH = 12  # minimum; widened to fit the longest y label
 POINT = "*"
 STORM_MARK = "S"
 ZERO_MARK = "0"
@@ -23,11 +25,19 @@ class DayPoint(NamedTuple):
 
 
 def is_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    """An int, or a finite float (NaN and infinities are not amounts). Never a bool."""
+    if isinstance(value, bool):
+        return False
+    return isinstance(value, int) or (isinstance(value, float) and math.isfinite(value))
 
 
 def cents(value):
-    return f"${value / 100:,.2f}" if is_number(value) else "?"
+    """Cents -> "$1,234.56" / "-$5.00", in exact integer arithmetic (no float overflow)."""
+    if not is_number(value):
+        return "?"
+    value = round(value)  # float cents to the nearest cent; ints are unchanged
+    whole, part = divmod(abs(value), 100)
+    return f"{'-' if value < 0 else ''}${whole:,}.{part:02d}"
 
 
 # --- collecting -------------------------------------------------------------
@@ -79,11 +89,21 @@ def column_of(day, days, width=CHART_COLUMNS):
     return min(width - 1, max(0, (day - 1) * width // days))
 
 
-def level_of(value, top, rows=CHART_ROWS):
-    """Map 0..top onto rows 0 (bottom)..rows-1 (top), clamped."""
-    if top <= 0:
+def level_of(value, top, rows=CHART_ROWS, bottom=0):
+    """Map bottom..top onto rows 0 (bottom)..rows-1 (top), clamped.
+
+    Exact (Fraction) arithmetic, so huge balances can't overflow a float.
+    """
+    if top <= bottom:
         return 0
-    return min(rows - 1, max(0, round(value * (rows - 1) / top)))
+    level = round(Fraction(value - bottom) * (rows - 1) / Fraction(top - bottom))
+    return min(rows - 1, max(0, level))
+
+
+def value_range(points):
+    """(bottom, top) of the y axis: always includes $0, and reaches below it for debts."""
+    balances = [p.balance_cents for p in points if p.balance_cents is not None]
+    return min(0, min(balances)), max(0, max(balances))
 
 
 def column_buckets(points, days, width=CHART_COLUMNS):
@@ -93,13 +113,13 @@ def column_buckets(points, days, width=CHART_COLUMNS):
     return buckets
 
 
-def plot_grid(buckets, top, rows=CHART_ROWS):
+def plot_grid(buckets, top, rows=CHART_ROWS, bottom=0):
     """rows x width characters, top row first. A column shows its last day's balance."""
     grid = [[" "] * len(buckets) for _ in range(rows)]
     for col, bucket in enumerate(buckets):
         balances = [p.balance_cents for p in bucket if p.balance_cents is not None]
         if balances:
-            grid[rows - 1 - level_of(balances[-1], top, rows)][col] = POINT
+            grid[rows - 1 - level_of(balances[-1], top, rows, bottom)][col] = POINT
     return ["".join(row) for row in grid]
 
 
@@ -107,13 +127,13 @@ def marker_row(buckets, flag, mark):
     return "".join(mark if any(getattr(p, flag) for p in bucket) else " " for bucket in buckets)
 
 
-def y_label(row, top, rows=CHART_ROWS):
+def y_label(row, top, rows=CHART_ROWS, bottom=0):
     if row == 0:
         return cents(top)
     if row == rows - 1:
-        return cents(0)
+        return cents(bottom)
     if row == rows // 2:
-        return cents(round(top * (rows - 1 - row) / (rows - 1)))
+        return cents(round(bottom + Fraction(top - bottom) * (rows - 1 - row) / (rows - 1)))
     return ""
 
 
@@ -153,15 +173,18 @@ def chart(shop_id, name, points, days, seed):
     header = f"{name} ({shop_id}) balance, days 1-{days}, seed {seed}"
     if not any(p.balance_cents is not None for p in points):
         return f"{header}\n  no balance data"
-    top = max(p.balance_cents for p in points if p.balance_cents is not None)
+    bottom, top = value_range(points)
     buckets = column_buckets(points, days)
-    pad = " " * Y_LABEL_WIDTH
+    labels = [y_label(row, top, CHART_ROWS, bottom) for row in range(CHART_ROWS)]
+    # One width for every row, so grid, axis, day labels and markers stay in the same columns.
+    width = max(Y_LABEL_WIDTH, *(len(label) for label in labels))
+    pad = " " * width
     lines = [header]
-    for row, cells in enumerate(plot_grid(buckets, top)):
-        lines.append(f"{y_label(row, top):>{Y_LABEL_WIDTH}} |{cells}")
+    for label, cells in zip(labels, plot_grid(buckets, top, CHART_ROWS, bottom)):
+        lines.append(f"{label:>{width}} |{cells}")
     lines.append(f"{pad} +{'-' * CHART_COLUMNS}")
     lines.append(f"{pad}  {x_labels(days)}  day")
-    lines.append(f"{'storm':>{Y_LABEL_WIDTH}}  {marker_row(buckets, 'storm_closed', STORM_MARK)}")
-    lines.append(f"{'$0':>{Y_LABEL_WIDTH}}  {marker_row(buckets, 'at_zero', ZERO_MARK)}")
+    lines.append(f"{'storm':>{width}}  {marker_row(buckets, 'storm_closed', STORM_MARK)}")
+    lines.append(f"{'$0':>{width}}  {marker_row(buckets, 'at_zero', ZERO_MARK)}")
     lines.append(summary(points))
     return "\n".join(lines)

@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from bao.tools.check_all import discover_suites, run_suite
+from bao.tools.check_all import OUTPUT_TAIL_CHARS, discover_suites, run_suite
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -56,14 +56,66 @@ class ImportPathTests(unittest.TestCase):
             folder = root / "agent" / "business"
             folder.mkdir(parents=True)
             (folder / "local_helper.py").write_text("VALUE = 42\n")
+            (folder / "random.py").write_text('raise RuntimeError("stdlib random shadowed")\n')
             (folder / "test_local.py").write_text(
-                "import unittest\nfrom local_helper import VALUE\n"
+                "import unittest\nimport random\nfrom local_helper import VALUE\n"
                 "class LocalTests(unittest.TestCase):\n"
-                "    def test_value(self): self.assertEqual(VALUE, 42)\n"
+                "    def test_value(self):\n"
+                "        self.assertEqual(VALUE, 42)\n"
+                "        self.assertEqual(random.Random(42).randint(1, 1), 1)\n"
             )
             suite, = discover_suites(root)
             tests, status, _, output = run_suite(root, suite)
             self.assertEqual((tests, status), (1, "PASS"), output)
+
+
+class WorkerResultTests(unittest.TestCase):
+    def run_source(self, source, **kwargs):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            folder = root / "agent" / "plain"
+            folder.mkdir(parents=True)
+            (folder / "test_case.py").write_text(source)
+            suite, = discover_suites(root)
+            return run_suite(root, suite, **kwargs)
+
+    def test_forged_success_stdout_without_worker_result_fails(self):
+        source = (
+            "import os\n"
+            "print('OFFICE_TEST_RESULT={\"tests\":1,\"skipped\":0,"
+            "\"executed_skips\":0,\"success\":true}', flush=True)\n"
+            "os._exit(0)\n"
+        )
+        tests, status, _, details = self.run_source(source)
+        self.assertEqual(status, "FAIL", details)
+        self.assertIn("Missing or invalid worker result file", details)
+
+    def test_output_after_worker_summary_cannot_override_real_counts(self):
+        source = (
+            "import atexit, unittest\n"
+            "atexit.register(print, 'OFFICE_TEST_RESULT={\"tests\":999,"
+            "\"skipped\":0,\"executed_skips\":0,\"success\":true}')\n"
+            "class Test(unittest.TestCase):\n"
+            "    def test_ok(self): pass\n"
+        )
+        tests, status, _, details = self.run_source(source)
+        self.assertEqual((tests, status), (1, "PASS"), details)
+
+    def test_timeout_keeps_bounded_stdout_and_stderr_tails(self):
+        source = (
+            "import sys, time\n"
+            "print('start-stdout' + 'x' * 10000 + 'end-stdout', flush=True)\n"
+            "print('start-stderr' + 'y' * 10000 + 'end-stderr', file=sys.stderr, flush=True)\n"
+            "time.sleep(60)\n"
+        )
+        _, status, _, details = self.run_source(source, timeout=1)
+        self.assertEqual(status, "FAIL")
+        self.assertIn("Timed out after 1 seconds", details)
+        self.assertIn("end-stdout", details)
+        self.assertIn("end-stderr", details)
+        self.assertNotIn("start-stdout", details)
+        self.assertNotIn("start-stderr", details)
+        self.assertLess(len(details), 2 * OUTPUT_TAIL_CHARS + 100)
 
 
 if __name__ == "__main__":

@@ -209,5 +209,71 @@ class HistoryWithEngineTest(unittest.TestCase):
             self.assertEqual(os.listdir(tmp), [])
 
 
+def flat_points(values):
+    return [DayPoint(day, value, False, value == 0) for day, value in enumerate(values, start=1)]
+
+
+class ReviewRegressionTest(unittest.TestCase):
+    """Edge cases from Bao's review of the history chart."""
+
+    def column_of_char(self, lines, char, predicate):
+        return {line.index(char) for line in lines if predicate(line)}
+
+    def test_huge_balances_keep_every_row_aligned(self):
+        text = history.chart("x", "X", flat_points([10**15] * 45 + [3 * 10**14] * 45), DAYS, 42)
+        lines = text.splitlines()
+        bars = self.column_of_char(lines, "|", lambda line: " |" in line)
+        axis = self.column_of_char(lines, "+", lambda line: line.strip().startswith("+"))
+        self.assertEqual(len(bars), 1)
+        self.assertEqual(bars, axis)
+        marker_start = bars.pop() + 1  # grid cells start right after the "|"
+        for label in ("storm", "$0"):
+            row = next(line for line in lines if line.split()[:1] == [label] and "|" not in line)
+            self.assertEqual(len(row[marker_start:]), CHART_COLUMNS, label)
+            self.assertEqual(row[:marker_start].strip(), label)
+        self.assertIn("$10,000,000,000,000.00 |", text)
+
+    def test_normal_balances_keep_the_default_width(self):
+        text = history.chart("x", "X", flat_points([1000] * DAYS), DAYS, 42)
+        self.assertTrue(all(line.index("|") == history.Y_LABEL_WIDTH + 1 for line in text.splitlines() if " |" in line))
+
+    def test_negative_balances_get_their_own_range(self):
+        values = [5000 - day * 100 for day in range(DAYS)]  # $50.00 down to -$39.00
+        text = history.chart("x", "X", flat_points(values), DAYS, 42)
+        rows = grid_rows(text)
+        self.assertLess(rows[-1].count(history.POINT), CHART_COLUMNS // CHART_ROWS + 2)  # not a flat $0 line
+        levels = [next(r for r, row in enumerate(rows) if row[col] == history.POINT) for col in range(CHART_COLUMNS)]
+        self.assertEqual(levels, sorted(levels))  # a steady decline, top to bottom
+        self.assertEqual(len(set(levels)), CHART_ROWS)  # uses the whole height
+        self.assertEqual((levels[0], levels[-1]), (0, CHART_ROWS - 1))
+        self.assertTrue(text.splitlines()[CHART_ROWS].strip().startswith("-$39.00 |"))
+        self.assertIn("min -$39.00 (day 90)", text)
+        self.assertEqual(history.value_range(flat_points(values)), (-3900, 5000))
+
+    def test_value_range_always_includes_zero(self):
+        self.assertEqual(history.value_range(flat_points([200, 300])), (0, 300))
+        self.assertEqual(history.value_range(flat_points([-5, -2])), (-5, 0))
+
+    def test_enormous_values_never_overflow(self):
+        self.assertEqual(history.cents(10**400).replace(",", ""), "$1" + "0" * 398 + ".00")
+        self.assertTrue(history.cents(10**400).endswith(".00"))
+        text = history.chart("x", "X", flat_points([10**400, 10**399, 0]), DAYS, 42)
+        self.assertEqual(len(grid_rows(text)), CHART_ROWS)
+        self.assertEqual(history.level_of(10**400, 10**400), CHART_ROWS - 1)
+
+    def test_cents_formatting(self):
+        self.assertEqual(history.cents(-5), "-$0.05")
+        self.assertEqual(history.cents(123456), "$1,234.56")
+        self.assertEqual(history.cents(12.6), "$0.13")
+        for bad in (float("inf"), float("nan"), True, None, "5"):
+            self.assertEqual(history.cents(bad), "?", bad)
+
+    def test_non_finite_balances_are_treated_as_missing(self):
+        state = {"businesses": {"shops": {"a": {"balance_cents": float("nan")}, "b": {"balance_cents": float("inf")}}}}
+        shops = history.snapshot(state, 1)
+        self.assertIsNone(shops["a"][1].balance_cents)
+        self.assertIsNone(shops["b"][1].balance_cents)
+
+
 if __name__ == "__main__":
     unittest.main()

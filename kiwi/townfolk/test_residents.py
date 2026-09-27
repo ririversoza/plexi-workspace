@@ -50,6 +50,26 @@ class ResidentsTests(unittest.TestCase):
         self.town.state = WriteOnly()
         self.system.setup(self.town)
 
+    def test_empty_people_after_setup(self):
+        state = self.town.state["residents"]
+        state["people"] = []
+        state["purchases"] = {SHOP_IDS[0]: 1}
+        state["spent_cents"] = {SHOP_IDS[0]: 500}
+        self.town.state["businesses"] = businesses()
+        self.town.state["businesses"]["wages_paid"] = {1: 500}
+        inputs = copy.deepcopy(self.town.state["businesses"])
+        rng = self.town.rng.getstate()
+        for day in (1, 2):
+            self.town.day = day
+            self.system.tick(self.town)
+            self.assertEqual(state, {
+                "people": [], "purchases": {}, "spent_cents": {},
+                "count": 0, "employed": 0, "avg_wallet_cents": 0,
+                "avg_mood": 0, "mood_bands": {"happy": 0, "ok": 0, "unhappy": 0},
+            })
+            self.assertEqual(self.town.rng.getstate(), rng)
+            self.assertEqual(self.town.state["businesses"], inputs)
+
     def test_determinism_over_90_days(self):
         def run(seed):
             town = Town(seed)
