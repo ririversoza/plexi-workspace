@@ -515,6 +515,49 @@ class WeeklyPricingTests(unittest.TestCase):
         self.assertTrue(tea_changes)
         self.assertEqual(tea_changes[0]["reason"], "bump")
 
+    def test_storm_on_pricing_day_keeps_week_stats(self):
+        """Closed on day 7 must not drop days 1–6; next open pricing day uses them."""
+        town = FakeTown()
+        system = System()
+        system.setup(town)
+        _seed_residents(town, purchases={}, spent={}, staff_pairs=[])
+        cap = SHOP_PARAMS["one-mug-tea"]["capacity"]
+        base = SHOP_PARAMS["one-mug-tea"]["price_cents"]
+        # Pretend days 1–6 were full sell-outs, then storm closes everyone on day 7.
+        system._week_stats["one-mug-tea"] = [(cap, cap)] * 6
+        system._prev_available = {s: cap for s in SHOP_IDS}
+        town.day = 7
+        town.state["weather"] = {"condition": "storm", "temp_c": 5.0, "season": "spring"}
+        system.tick(town)
+        self.assertEqual(town.state["businesses"]["open_count"], 0)
+        # Week window must survive the closed pricing day (may gain yesterday's log row).
+        carried = system._week_stats["one-mug-tea"]
+        self.assertGreaterEqual(len(carried), 6)
+        self.assertTrue(all(avail == cap for _, avail in carried[:6]))
+        self.assertFalse(
+            any(
+                e["kind"] == "price_change" and e["shop_id"] == "one-mug-tea"
+                for e in town.events
+            )
+        )
+        self.assertEqual(
+            town.state["businesses"]["shops"]["one-mug-tea"]["price_cents"], base
+        )
+        # Next pricing day with sun: carried stats still drive a bump.
+        town.day = 14
+        town.state["weather"] = {"condition": "sun", "temp_c": 18.0, "season": "spring"}
+        system.tick(town)
+        tea = town.state["businesses"]["shops"]["one-mug-tea"]
+        self.assertEqual(tea["price_cents"], base + (base * 5) // 100)
+        self.assertEqual(system._week_stats["one-mug-tea"], [])
+        tea_changes = [
+            e
+            for e in town.events
+            if e["kind"] == "price_change" and e["shop_id"] == "one-mug-tea"
+        ]
+        self.assertTrue(tea_changes)
+        self.assertEqual(tea_changes[-1]["reason"], "bump")
+
     def test_prices_always_within_bounds_over_90_days(self):
         _, snapshots, _, town = run_businesses(
             seed=42, days=90, with_weather=True, with_residents=True

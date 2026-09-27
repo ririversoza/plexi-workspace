@@ -388,13 +388,17 @@ class System:
         )
 
     def _apply_weekly_prices(self, town, shops: dict) -> None:
-        """Bump/cut open-shop prices from this week's open-day sell-through."""
+        """Bump/cut open-shop prices from sell-through since the last adjust.
+
+        Closed shops (e.g. storm on a pricing day) keep their week stats so the
+        next open pricing day still sees that window — matching the README.
+        """
         for shop_id in SHOP_IDS:
             shop = shops[shop_id]
-            stats = list(self._week_stats.get(shop_id) or [])
-            self._week_stats[shop_id] = []
             if shop.get("open") is not True:
                 continue
+            stats = list(self._week_stats.get(shop_id) or [])
+            self._week_stats[shop_id] = []
             old_price = shop["price_cents"]
             new_price, reason = next_price_cents(shop_id, old_price, stats)
             if new_price != old_price:

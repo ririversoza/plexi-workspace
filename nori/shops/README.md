@@ -40,7 +40,7 @@ Card fees, day-1 equipment, and endogenous pricing from the competition entries 
 2. **Staff.** `staff` = resident ids whose `job` equals the shop id (sorted). Missing residents → empty staff.
 3. **Open / available.** Storm → every shop `open=False`, `available=0`. Otherwise pay daily overhead if affordable; if not, close and emit `shop_closed`. Rain keeps the shop open at 70% capacity; snow at 50%; sun/cloud at 100% (`int(capacity * factor)`).
 4. **Wages (open days only).** Pay only when `open` is true after overhead. Each staffer gets `WAGE_BASE_CENTS = 500` ($5) plus an equal share of `20%` of the revenue booked that morning (`WAGE_REVENUE_SHARE_PCT`). Closed / storm days pay **$0** (no `wages_short` for being closed). Partial pay if cash is short; emit `wages_short`. Listed in `wages_paid` for residents to credit the same day.
-5. **Weekly pricing (Phase 3).** On days `7, 14, 21, …` (`town.day % 7 == 0`), each **open** shop revises `price_cents` from open-day sell-through logged since the last adjust. **No `town.rng` draws** (businesses already draws zero times per tick; pricing keeps that constant).
+5. **Weekly pricing (Phase 3).** On days `7, 14, 21, …` (`town.day % 7 == 0`), each **open** shop revises `price_cents` from open-day sell-through logged **since the last adjust**. Closed shops on a pricing day (e.g. storm) **keep** their week stats and carry them to the next open pricing day. **No `town.rng` draws** (businesses already draws zero times per tick; pricing keeps that constant).
 6. **Pending refresh (by day, not content).** After residents shop, a post-residents system emit (`economy` / `traffic` / `emergency` / `log`) copies that day's `purchases`/`spent_cents` into `pending_revenue_cents` and records `_pending_from_day = town.day`. The next businesses tick books that day exactly once (`_last_settled_day`), even if two days have identical purchase dicts. Weather emits are ignored (purchases still belong to the previous day). If no later system emits, the morning fallback books `town.day - 1` from residents exactly once. Day-90 sales stay visible in `pending_revenue_cents` with no day-91 tick.
 
 ### Weekly pricing rule
@@ -58,6 +58,7 @@ On a pricing day, for each shop that is open right now:
 Then clamp to integer cents in
 `[max(80% of base, 115% of unit cost), 125% of base]`.
 Emit `price_change` only when the price actually moves (`shop_id`, `old_price_cents`, `new_price_cents`, `reason` ∈ `bump|cut`).
+Week stats clear only after an open shop runs this adjust; a storm/overhead closure on day 7/14/… does **not** drop the window.
 
 ### Why this wage rule
 
