@@ -25,6 +25,19 @@ SHOP_IDS = (
     "fold-post",
     "daifuku-cart",
 )
+# Catalog base prices, copied from nori/shops/README.md (not imported). A shop's own
+# "base_price_cents", if Nori ever adds one to state, wins over this table.
+BASE_PRICE_CENTS = {
+    "one-mug-tea": 325,
+    "bench-and-bell": 6900,
+    "spoke-and-spanner": 7500,
+    "matcha-mile": 550,
+    "fold-post": 800,
+    "daifuku-cart": 375,
+}
+PRICE_UP = "↑"
+PRICE_DOWN = "↓"
+MOOD_BANDS = ("happy", "ok", "unhappy")
 BOX_INNER = 24
 BOXES_PER_ROW = 3
 STAFF_LINES = 2
@@ -96,13 +109,22 @@ def units_sold(shop_id, shop, purchases):
     return shop.get("sold_yesterday", 0)
 
 
+def price_arrow(shop_id, shop):
+    """" ↑" / " ↓" when today's price is above / below base; "" when equal or unknown."""
+    price = shop.get("price_cents")
+    base = shop.get("base_price_cents", BASE_PRICE_CENTS.get(shop_id))
+    if not (is_number(price) and is_number(base)) or price == base:
+        return ""
+    return f" {PRICE_UP}" if price > base else f" {PRICE_DOWN}"
+
+
 def shop_box(shop_id, shop, names, purchases):
     """One storefront as a list of equal-width lines."""
     status = "OPEN" if shop.get("open") else "CLOSED"
     staff = [f"  {label}" if label else "" for label in staff_lines(shop.get("staff"), names)]
     body = [
         shop.get("name", shop_id),
-        f"{status:<8}{cents(shop.get('price_cents'))} each",
+        f"{status:<8}{cents(shop.get('price_cents'))} each{price_arrow(shop_id, shop)}",
         f"sold {units_sold(shop_id, shop, purchases)}",
         f"bal {cents(shop.get('balance_cents'))}",
     ] + staff
@@ -157,7 +179,22 @@ def residents_panel(state):
             for rank, p in enumerate(richest, start=1)
         )
         lines.append(f"  top wallets: {ranked}")
+    mood = mood_line(residents)
+    if mood:
+        lines.append(mood)
     return lines
+
+
+def mood_line(residents):
+    """Kiwi's avg_mood (0-100) and mood_bands; None when neither key exists."""
+    if "avg_mood" not in residents and "mood_bands" not in residents:
+        return None
+    avg = residents.get("avg_mood")
+    avg_text = f"{avg}/100" if is_number(avg) else "n/a"
+    bands = as_dict(residents.get("mood_bands"))
+    order = [b for b in MOOD_BANDS if b in bands] + sorted(str(b) for b in bands if b not in MOOD_BANDS)
+    bands_text = " | ".join(f"{band} {bands[band]}" for band in order) or "bands n/a"
+    return f"  mood: avg {avg_text} | {bands_text}"
 
 
 def traffic_text(state):
@@ -168,8 +205,19 @@ def traffic_text(state):
     congestion_text = f"{congestion:.0%}" if is_number(congestion) else "?"
     return (
         f"{traffic.get('commuters', '?')} commuters, congestion {congestion_text}, "
-        f"{traffic.get('accidents_today', '?')} accidents"
+        f"{traffic.get('accidents_today', '?')} accidents{bus_text(traffic)}"
     )
+
+
+def bus_text(traffic):
+    """Bao's bus_running / bus_riders as a traffic suffix; "" when neither key exists."""
+    if "bus_running" not in traffic and "bus_riders" not in traffic:
+        return ""
+    running = traffic.get("bus_running")
+    status = "bus running" if running is True else "no bus" if running is False else "bus n/a"
+    riders = traffic.get("bus_riders")
+    riders_text = f" ({riders} riders)" if is_number(riders) else ""
+    return f", {status}{riders_text}"
 
 
 def emergency_text(state):
@@ -192,12 +240,36 @@ def treasury_text(state):
     return dollars(economy.get("treasury"))
 
 
+def project_name(project):
+    """A project as text: a plain string, or a dict's "name"; None when unusable."""
+    if isinstance(project, str) and project:
+        return project
+    if isinstance(project, dict) and project.get("name"):
+        return str(project["name"])
+    return None
+
+
+def town_hall_text(state):
+    """Sora's economy project / projects_completed; None when neither key exists."""
+    economy = state.get("economy")
+    if not isinstance(economy, dict) or ("project" not in economy and "projects_completed" not in economy):
+        return None
+    name = project_name(economy.get("project"))
+    done = economy.get("projects_completed")
+    done_text = f"{done} completed" if is_number(done) else "completed n/a"
+    return f"building {name or 'n/a'} | {done_text}"
+
+
 def ticker(state):
-    return [
+    lines = [
         f"TICKER   traffic:   {traffic_text(state)}",
         f"         emergency: {emergency_text(state)}",
         f"         treasury:  {treasury_text(state)}",
     ]
+    town_hall = town_hall_text(state)
+    if town_hall:
+        lines.append(f"         town hall: {town_hall}")
+    return lines
 
 
 def render(state, day, days=DAYS):

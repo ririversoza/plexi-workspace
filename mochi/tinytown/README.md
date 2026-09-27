@@ -84,6 +84,22 @@ system: it never ticks, emits or touches `town.rng`.
   lower id).
 - **Ticker:** traffic, emergency, and `economy.treasury` (float dollars; every other amount
   is integer cents).
+- **Phase 3 extras (all optional).** Each shows up only when its key exists. With none of
+  them, the frame is byte-identical to the Phase 2 view, including on current main where
+  every price equals its base:
+  - `residents.avg_mood` / `mood_bands` (Kiwi) add `  mood: avg 58/100 | happy 56 | ok 45 | unhappy 19`
+    under the top wallets (`n/a` for whichever half is missing).
+  - A shop's `price_cents` vs its base price (Nori's weekly pricing) adds ` ↑` or ` ↓` after
+    the price, and nothing when they're equal. The base is the shop's `base_price_cents` if
+    state has one, otherwise the catalog price copied from `nori/shops/README.md`
+    (`BASE_PRICE_CENTS`). Shops not in that table get no arrow.
+  - `economy.project` (a string, or a dict with `"name"`) / `projects_completed` (Sora) add a
+    `town hall: building Library | 2 completed` ticker line.
+  - `traffic.bus_running` / `bus_riders` (Bao) add `, bus running (12 riders)` (or `no bus`,
+    or `bus n/a`) to the traffic line.
+
+  `test_view_phase3.py` gives each key a present case, an absent case and an odd-value
+  case, and checks a frame with none of them against a golden copy of the pre-Phase 3 output.
 
 Systems come from the engine's own `SYSTEM_MODULES`, so the viewer only loads what that
 engine version ticks. Anything missing is drawn as `not built yet`, and odd or missing
