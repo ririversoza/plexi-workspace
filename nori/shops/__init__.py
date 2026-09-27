@@ -82,6 +82,12 @@ WEATHER_AVAILABLE_FACTOR = {
 }
 DEFAULT_CONDITION = "sun"
 
+# Systems that tick after residents (or subscribe-only log). Their emits mean
+# today's residents.purchases are already written, so we can tag pending by day.
+_POST_RESIDENTS_SYSTEMS = frozenset(
+    {"residents", "economy", "traffic", "emergency", "log"}
+)
+
 
 def _mapping(value) -> dict:
     return value if isinstance(value, dict) else {}
@@ -89,15 +95,6 @@ def _mapping(value) -> dict:
 
 def _nonneg_int(value) -> int:
     return value if type(value) is int and value >= 0 else 0
-
-
-def _purchases_signature(purchases: dict, spent: dict) -> tuple:
-    """Stable fingerprint of the residents purchase batch we settle against."""
-    keys = sorted(set(purchases) | set(spent) | set(SHOP_IDS))
-    return tuple(
-        (key, _nonneg_int(purchases.get(key)), _nonneg_int(spent.get(key)))
-        for key in keys
-    )
 
 
 def _credit(balance: int, amount: int) -> int:
@@ -128,12 +125,20 @@ class System:
     name = "businesses"
 
     def __init__(self) -> None:
-        self._settled_signature: tuple | None = None
         self._town = None
+        # Settlement is keyed by purchase *day*, not by purchase content.
+        self._pending_from_day: int | None = None
+        self._pending_units: dict[str, int] = {shop_id: 0 for shop_id in SHOP_IDS}
+        self._last_settled_day: int | None = None
+        # Lifetime revenue credited from settlement (for conservation checks).
+        self.revenue_booked_total_cents = 0
 
     def setup(self, town) -> None:
         self._town = town
-        self._settled_signature = None
+        self._pending_from_day = None
+        self._pending_units = {shop_id: 0 for shop_id in SHOP_IDS}
+        self._last_settled_day = None
+        self.revenue_booked_total_cents = 0
         shops = {}
         pending = {}
         for shop_id in SHOP_IDS:
@@ -174,40 +179,25 @@ class System:
         if not isinstance(people, list):
             people = []
 
-        # --- 1. Book pending (yesterday's sales); fall back to residents.purchases
-        pending = dict(_mapping(state.get("pending_revenue_cents")))
-        purchases = _mapping(residents.get("purchases"))
-        spent = _mapping(residents.get("spent_cents"))
-        signature = _purchases_signature(purchases, spent)
-
-        if not any(_nonneg_int(v) for v in pending.values()):
-            # Fallback only when this purchase batch has not already been settled
-            # (avoids double-booking if residents never retick).
-            if signature != self._settled_signature:
-                pending = self._revenue_from_residents(purchases, spent, shops)
-            else:
-                pending = {shop_id: 0 for shop_id in SHOP_IDS}
-
+        # --- 1. Book exactly one unsettled purchase-day (one-day lag)
+        pending, units, settled_day = self._batch_to_settle(town, state, shops, residents)
         settled_revenue: dict[str, int] = {shop_id: 0 for shop_id in SHOP_IDS}
         for shop_id in SHOP_IDS:
             shop = shops[shop_id]
             params = SHOP_PARAMS[shop_id]
-            units = _nonneg_int(purchases.get(shop_id))
             revenue = _nonneg_int(pending.get(shop_id))
-            if revenue == 0 and units > 0:
-                revenue = _nonneg_int(spent.get(shop_id))
-                if revenue == 0:
-                    revenue = units * shop["price_cents"]
-
-            if revenue > 0 and units == 0:
+            sold = _nonneg_int(units.get(shop_id))
+            if revenue > 0 and sold == 0:
                 price = shop["price_cents"]
-                units = (revenue // price) if price else 0
-            shop["sold_yesterday"] = units
+                sold = (revenue // price) if price else 0
+            shop["sold_yesterday"] = sold
             settled_revenue[shop_id] = revenue
 
             balance = shop["balance_cents"]
             balance = _credit(balance, revenue)
-            cogs = units * params["unit_cost_cents"]
+            if revenue > 0:
+                self.revenue_booked_total_cents += revenue
+            cogs = sold * params["unit_cost_cents"]
             balance, cogs_paid = _debit(balance, cogs)
             if cogs_paid < cogs:
                 town.emit(
@@ -218,8 +208,11 @@ class System:
                 )
             shop["balance_cents"] = balance
 
-        self._settled_signature = signature
+        if settled_day is not None:
+            self._last_settled_day = settled_day
         state["pending_revenue_cents"] = {shop_id: 0 for shop_id in SHOP_IDS}
+        self._pending_from_day = None
+        self._pending_units = {shop_id: 0 for shop_id in SHOP_IDS}
 
         # --- 2. Staff lists from residents.jobs
         staff_by_shop: dict[str, list] = {shop_id: [] for shop_id in SHOP_IDS}
@@ -303,46 +296,92 @@ class System:
             wages_total=sum(wages_paid.values()),
         )
 
+    def _batch_to_settle(
+        self, town, state: dict, shops: dict, residents: dict
+    ) -> tuple[dict[str, int], dict[str, int], int | None]:
+        """Return (revenue_by_shop, units_by_shop, purchase_day) to book today.
+
+        Prefers a pending batch captured after residents (tagged by day). Falls
+        back to current residents.purchases as yesterday's unsettled day when no
+        later system emitted. Never re-books a purchase day already settled.
+        """
+        empty = {shop_id: 0 for shop_id in SHOP_IDS}
+        pending = dict(_mapping(state.get("pending_revenue_cents")))
+        if (
+            self._pending_from_day is not None
+            and self._pending_from_day != self._last_settled_day
+        ):
+            return pending, dict(self._pending_units), self._pending_from_day
+
+        # Morning fallback: residents still hold yesterday's batch until they tick.
+        yday = town.day - 1
+        if yday < 1 or yday == self._last_settled_day:
+            return empty, empty, None
+        purchases = _mapping(residents.get("purchases"))
+        spent = _mapping(residents.get("spent_cents"))
+        revenue, units = self._revenue_and_units(purchases, spent, shops)
+        if not any(revenue.values()):
+            # Empty day still counts as settled so we don't re-read it forever.
+            return empty, empty, yday
+        return revenue, units, yday
+
+    def _revenue_and_units(
+        self, purchases: dict, spent: dict, shops: dict
+    ) -> tuple[dict[str, int], dict[str, int]]:
+        revenue = {}
+        units = {}
+        for shop_id in SHOP_IDS:
+            sold = _nonneg_int(purchases.get(shop_id))
+            cents = _nonneg_int(spent.get(shop_id))
+            if cents == 0 and sold > 0:
+                price = shops.get(shop_id, {}).get("price_cents")
+                if type(price) is not int:
+                    price = SHOP_PARAMS[shop_id]["price_cents"]
+                cents = sold * price
+            revenue[shop_id] = cents
+            units[shop_id] = sold
+        return revenue, units
+
     def _revenue_from_residents(
         self, purchases: dict, spent: dict, shops: dict
     ) -> dict[str, int]:
-        pending = {}
-        for shop_id in SHOP_IDS:
-            units = _nonneg_int(purchases.get(shop_id))
-            revenue = _nonneg_int(spent.get(shop_id))
-            if revenue == 0 and units > 0:
-                revenue = units * shops[shop_id]["price_cents"]
-            pending[shop_id] = revenue
-        return pending
+        revenue, _ = self._revenue_and_units(purchases, spent, shops)
+        return revenue
 
     def _capture_pending(self, event: dict) -> None:
-        """After residents shop, mirror unbooked sales into pending_revenue_cents.
+        """Tag today's residents purchases into pending_revenue_cents by day.
 
-        Residents do not emit; the next system that emits (economy, traffic, …)
-        triggers this. Skips batches we already booked this morning so we never
-        double-count. Day-90 purchases stay visible here with no day-91 tick.
+        Runs when a post-residents system emits (residents do not emit themselves).
+        Weather emits are ignored: at that point purchases still belong to the
+        previous day and are either already pending or booked via morning fallback.
+        Day-90 purchases stay visible here with no day-91 tick.
         """
         town = self._town
         if town is None:
             return
         if event.get("system") == self.name:
             return
+        if event.get("system") not in _POST_RESIDENTS_SYSTEMS:
+            return
         state = town.state.get(self.name)
         if not isinstance(state, dict):
+            return
+        day = town.day
+        if type(day) is not int or day < 1:
+            return
+        if day == self._last_settled_day:
             return
         residents = _mapping(town.state.get("residents"))
         purchases = _mapping(residents.get("purchases"))
         spent = _mapping(residents.get("spent_cents"))
-        signature = _purchases_signature(purchases, spent)
-        if signature == self._settled_signature:
-            return
         shops = _mapping(state.get("shops"))
         for shop_id in SHOP_IDS:
             if shop_id not in shops:
                 shops[shop_id] = {"price_cents": SHOP_PARAMS[shop_id]["price_cents"]}
-        state["pending_revenue_cents"] = self._revenue_from_residents(
-            purchases, spent, shops
-        )
+        revenue, units = self._revenue_and_units(purchases, spent, shops)
+        state["pending_revenue_cents"] = revenue
+        self._pending_units = units
+        self._pending_from_day = day
 
 
 __all__ = [

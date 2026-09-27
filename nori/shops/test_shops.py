@@ -294,6 +294,97 @@ class BoundsTests(unittest.TestCase):
         town.emit("daily")
         pending = town.state["businesses"]["pending_revenue_cents"]
         self.assertEqual(pending["daifuku-cart"], units * price)
+        self.assertEqual(system._pending_from_day, 90)
+
+
+class SettlementDayTests(unittest.TestCase):
+    """Settlement must key by purchase day, not by purchase content."""
+
+    def test_identical_consecutive_batches_are_both_booked(self):
+        town = FakeTown()
+        system = System()
+        system.setup(town)
+        _seed_residents(town, purchases={}, spent={}, staff_pairs=[])
+        town.state["weather"] = {"condition": "sun", "temp_c": 20.0, "season": "spring"}
+        price = SHOP_PARAMS["one-mug-tea"]["price_cents"]
+        units = 5
+        batch_p = {"one-mug-tea": units}
+        batch_s = {"one-mug-tea": units * price}
+        revenue = units * price
+
+        town.day = 1
+        town._current_system = "businesses"
+        system.tick(town)
+        self.assertEqual(system.revenue_booked_total_cents, 0)
+        town.state["residents"]["purchases"] = dict(batch_p)
+        town.state["residents"]["spent_cents"] = dict(batch_s)
+        town._current_system = "economy"
+        town.emit("daily")
+        self.assertEqual(system._pending_from_day, 1)
+
+        town.day = 2
+        town._current_system = "businesses"
+        system.tick(town)
+        self.assertEqual(system.revenue_booked_total_cents, revenue)
+        self.assertEqual(system._last_settled_day, 1)
+        # Identical content on day 2 — must still be captured as a new day.
+        town.state["residents"]["purchases"] = dict(batch_p)
+        town.state["residents"]["spent_cents"] = dict(batch_s)
+        town._current_system = "economy"
+        town.emit("daily")
+        self.assertEqual(system._pending_from_day, 2)
+
+        town.day = 3
+        town._current_system = "businesses"
+        system.tick(town)
+        self.assertEqual(system.revenue_booked_total_cents, 2 * revenue)
+        self.assertEqual(system._last_settled_day, 2)
+
+    def test_money_conservation_spent_equals_booked_plus_pending(self):
+        town = FakeTown()
+        system = System()
+        system.setup(town)
+        _seed_residents(town, purchases={}, spent={}, staff_pairs=[])
+        town.state["weather"] = {"condition": "sun", "temp_c": 18.0, "season": "spring"}
+        price = SHOP_PARAMS["fold-post"]["price_cents"]
+        total_spent = 0
+        # Mix identical and varying non-empty days across a short run.
+        daily_units = [3, 3, 3, 7, 0, 4, 4]
+        for day, units in enumerate(daily_units, start=1):
+            town.day = day
+            town._current_system = "businesses"
+            system.tick(town)
+            purchases = {"fold-post": units} if units else {}
+            spent = {"fold-post": units * price} if units else {}
+            town.state["residents"]["purchases"] = purchases
+            town.state["residents"]["spent_cents"] = spent
+            total_spent += units * price
+            town._current_system = "economy"
+            town.emit("daily")
+        pending_total = sum(
+            town.state["businesses"]["pending_revenue_cents"].values()
+        )
+        self.assertEqual(
+            total_spent,
+            system.revenue_booked_total_cents + pending_total,
+        )
+        # Last day's spend should still be pending (one-day lag).
+        self.assertEqual(pending_total, daily_units[-1] * price)
+
+    def test_settlement_safe_with_residents_missing(self):
+        town = FakeTown()
+        system = System()
+        system.setup(town)
+        for day in range(1, 11):
+            town.day = day
+            system.tick(town)
+        self.assertEqual(system.revenue_booked_total_cents, 0)
+        self.assertEqual(town.state["businesses"]["wages_paid"], {})
+        for shop in town.state["businesses"]["shops"].values():
+            self.assertGreaterEqual(shop["balance_cents"], 0)
+            self.assertEqual(shop["sold_yesterday"], 0)
+        # Empty yesterday batches may be marked settled; that must not credit cash.
+        self.assertEqual(sum(town.state["businesses"]["pending_revenue_cents"].values()), 0)
 
 
 class MissingPeersTests(unittest.TestCase):
