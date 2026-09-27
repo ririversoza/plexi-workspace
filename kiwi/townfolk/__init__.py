@@ -31,7 +31,8 @@ def _summarize(state):
     people = state["people"]
     state["count"] = len(people)
     state["employed"] = sum(person["job"] is not None for person in people)
-    state["avg_wallet_cents"] = sum(person["wallet_cents"] for person in people) // len(people)
+    state["avg_wallet_cents"] = (sum(person["wallet_cents"] for person in people) // len(people)
+                                 if people else 0)
 
 
 def _update_mood(state, bought_today, condition="sun"):
