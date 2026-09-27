@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from bao.tools.check_all import discover_suites
+from bao.tools.check_all import discover_suites, run_suite
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -27,6 +27,43 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(suites[1].tests, ("test_a.py", "test_b.py"))
             self.assertEqual(discover_suites(root, "zeta"), [suites[2]])
             self.assertEqual(discover_suites(root, "unknown"), [])
+
+
+class ImportPathTests(unittest.TestCase):
+    def test_package_does_not_shadow_stdlib_inspect(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            package = root / "agent" / "town"
+            package.mkdir(parents=True)
+            (root / "agent" / "__init__.py").touch()
+            (package / "__init__.py").touch()
+            (package / "inspect.py").write_text('raise RuntimeError("stdlib inspect shadowed")\n')
+            (package / "test_mock.py").write_text(
+                "import unittest\nfrom unittest.mock import create_autospec\n"
+                "class MockTests(unittest.TestCase):\n"
+                "    def test_signature(self):\n"
+                "        mock = create_autospec(lambda value: value)\n"
+                "        mock(1)\n"
+                "        mock.assert_called_once_with(1)\n"
+            )
+            suite, = discover_suites(root)
+            tests, status, _, output = run_suite(root, suite)
+            self.assertEqual((tests, status), (1, "PASS"), output)
+
+    def test_plain_folder_keeps_local_imports(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            folder = root / "agent" / "business"
+            folder.mkdir(parents=True)
+            (folder / "local_helper.py").write_text("VALUE = 42\n")
+            (folder / "test_local.py").write_text(
+                "import unittest\nfrom local_helper import VALUE\n"
+                "class LocalTests(unittest.TestCase):\n"
+                "    def test_value(self): self.assertEqual(VALUE, 42)\n"
+            )
+            suite, = discover_suites(root)
+            tests, status, _, output = run_suite(root, suite)
+            self.assertEqual((tests, status), (1, "PASS"), output)
 
 
 if __name__ == "__main__":

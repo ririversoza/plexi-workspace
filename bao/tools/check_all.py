@@ -17,10 +17,12 @@ WORKER = r'''
 import json, pathlib, sys, unittest
 root, folder = map(pathlib.Path, sys.argv[1:3])
 sys.path.insert(0, str(root))
-sys.path.insert(0, str(folder))
 parts = folder.relative_to(root).parts
-package = all((root.joinpath(*parts[:i]) / "__init__.py").is_file()
+# Direct agent tests are legacy standalone suites (e.g. bao/test_roster.py).
+package = len(parts) > 1 and all((root.joinpath(*parts[:i]) / "__init__.py").is_file()
               for i in range(1, len(parts) + 1))
+if not package:
+    sys.path.insert(0, str(folder))
 names = [(".".join(parts) + "." if package else "") + pathlib.Path(name).stem
          for name in sys.argv[3:]]
 suite = unittest.defaultTestLoader.loadTestsFromNames(names)
