@@ -36,6 +36,10 @@ def _summarize(state):
 class System:
     name = "residents"
 
+    def __init__(self, purchase_observer=None):
+        # Optional reporting hook receives only immutable receipt values.
+        self.purchase_observer = purchase_observer
+
     def setup(self, town):
         names = [f"{first} {last}" for first in FIRST_NAMES for last in LAST_NAMES]
         jobs = [shop for shop in SHOP_IDS for _ in range(STAFF_COUNTS[shop])] + ["out-of-town"] * 94 + [None] * 18
@@ -92,6 +96,8 @@ class System:
                 stock[shop_id] -= 1
                 purchases[shop_id] = purchases.get(shop_id, 0) + 1
                 spent[shop_id] = spent.get(shop_id, 0) + price
+                if self.purchase_observer is not None:
+                    self.purchase_observer(person["id"], shop_id, price)
         state["purchases"] = purchases
         state["spent_cents"] = spent
         _summarize(state)
