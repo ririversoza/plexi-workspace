@@ -1,8 +1,10 @@
 # RNG isolation measurements
 
-Measured on 2026-09-27 against current `origin/main`
+Measured on 2026-09-27 at commit
 `8ad2f2d4e73b2926c6f24e90660815773472fc1e`, using **CPython 3.9.6**,
 seed **42**, **90 days**, all installed systems, and log `csv_path=None`.
+The counts drift slightly on later `main` revisions; the shared-stream coupling
+conclusion still holds.
 This is a measurement and design note only; no shared-system code was changed.
 
 ## Result: constant API calls do not mean constant stream advancement
