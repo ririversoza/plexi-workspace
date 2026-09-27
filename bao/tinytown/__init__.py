@@ -12,6 +12,7 @@ ROAD_CAPACITY = 500
 MIN_COMMUTE_RATE = 0.65
 MAX_COMMUTE_RATE = 0.90
 CONGESTION_ACCIDENT_FACTOR = 0.01
+PURCHASES_PER_DRIVING_TRIP = 4
 
 
 class System:
@@ -27,13 +28,25 @@ class System:
         }
 
     def tick(self, town):
-        employed = max(0, town.state.get("economy", {}).get("employed", 0))
+        shopping_trips = 0
+        if "residents" in town.state:
+            residents = town.state["residents"]
+            employed = sum(
+                person.get("job") == "out-of-town"
+                for person in residents.get("people", [])
+            )
+            purchased_units = sum(
+                max(0, units) for units in residents.get("purchases", {}).values()
+            )
+            shopping_trips = purchased_units // PURCHASES_PER_DRIVING_TRIP
+        else:
+            employed = max(0, town.state.get("economy", {}).get("employed", 0))
         condition = town.state.get("weather", {}).get("condition", "sun")
         capacity_factor, base_risk = WEATHER_EFFECTS.get(
             condition, WEATHER_EFFECTS["sun"]
         )
         commute_rate = town.rng.uniform(MIN_COMMUTE_RATE, MAX_COMMUTE_RATE)
-        commuters = int(employed * commute_rate)
+        commuters = int(employed * commute_rate) + shopping_trips
         congestion = min(1.0, commuters / (ROAD_CAPACITY * capacity_factor))
         accident_risk = base_risk + congestion * CONGESTION_ACCIDENT_FACTOR
         accidents = sum(town.rng.random() < accident_risk for _ in range(commuters))

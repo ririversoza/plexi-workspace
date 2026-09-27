@@ -5,31 +5,47 @@
 
 ## State and lifecycle
 
-Reads `economy.employed` and `weather.condition` without modifying either.
+Reads `residents.people`, `residents.purchases`, and `weather.condition` read-only.
+When `residents` is absent, reads `economy.employed` for the Phase 1 fallback.
+When residents are present, only people with `job == "out-of-town"` contribute
+work commutes; shop staff walk and unemployed residents have no work commute.
+Missing people or purchases default to an empty list or dictionary, respectively.
+An empty residents state does not fall back to economy.
 Missing economy or employment defaults to **0** workers; missing weather or
 condition defaults to **sun**. Unknown condition strings also use sun's effects.
 Other weather fields are unused. Values follow the contract's types; malformed
-objects and nonnumeric employment are not supported. Negative employment is
+objects and nonnumeric employment are not supported. Negative employment and individual purchase counts are
 defensively clamped to zero.
 
 Writes only `state['traffic']`, replacing all three daily values:
 
-- `commuters`: nonnegative integer, at most employed workers.
+- `commuters`: nonnegative integer total road trips (work plus shopping).
+  At most out-of-town workers plus `sum(nonnegative purchases) // 4` when
+  residents exist; at most employed workers in the Phase 1 fallback.
 - `congestion`: float from 0.0 to 1.0.
 - `accidents_today`: integer from zero to the number of commuters.
 
 Setup initializes these to `0`, `0.0`, and `0` and consumes no randomness or
 events. Each tick emits one `traffic_daily` event with the three output fields;
 the town supplies day/system metadata. Counts reset each day; no backlog exists.
-The intended order is weather, economy, traffic, emergency, so traffic uses
+The intended order is weather, businesses, residents, economy, traffic, emergency, so traffic uses
 today's upstream values. The model also works alone for all 90 days.
 
 ## Model and every numeric assumption
 
 Each day draws a commute fraction uniformly between **0.65 and 0.90**, then
-rounds `employed * fraction` down to an integer. This represents daily variation
+rounds `eligible_workers * fraction` down to an integer. This represents daily variation
 in attendance and remote work. No weekend, season, temperature, population, or
-multi-trip effects are modeled. Zero workers means zero commuters and accidents.
+return-trip effects are modeled. Out-of-town workers use the same daily rate,
+including weekends, preserving the existing attendance model.
+
+With residents present, **25%** of today's purchased units become extra driving
+trips: `sum(max(0, units) for units in purchases.values()) // 4`. Purchases are a
+proxy for shopping visits, not unique shoppers (a resident can buy at two shops).
+This deterministic share consumes no additional RNG draws and is bounded by the
+purchase count. Work and shopping trips are added before congestion and accidents
+are calculated. Zero workers can still produce shopping traffic; zero workers
+and zero purchases produce zero trips and accidents. Phase 1 has no shopping trips.
 
 Normal road capacity is **500 commuters/day**. Congestion is commuters divided
 by weather-adjusted capacity, capped at **1.0** (zero demand gives **0.0**).
