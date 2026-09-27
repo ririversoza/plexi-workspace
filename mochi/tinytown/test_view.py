@@ -141,6 +141,12 @@ class HelpersTest(unittest.TestCase):
         self.assertEqual(view.staff_lines([1, 2, 3], {1: "A"}), ["A", "+2 more"])
         self.assertEqual(view.staff_lines([], {}), ["no staff", ""])
 
+    def test_dollars_never_prints_negative_zero(self):
+        self.assertEqual(view.dollars(-0.001), "$0.00")
+        self.assertEqual(view.dollars(-0.004), "$0.00")
+        self.assertEqual(view.dollars(-0.006), "-$0.01")
+        self.assertEqual(view.dollars(-1234.5), "-$1,234.50")
+
     def test_load_systems_skips_missing_and_disables_log_csv(self):
         systems = view.load_systems({"log": "mochi.tinytown", "ghost": "no_such_pkg.tinytown"})
         self.assertEqual([s.name for s in systems], ["log"])
