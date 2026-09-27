@@ -13,6 +13,7 @@ MIN_COMMUTE_RATE = 0.65
 MAX_COMMUTE_RATE = 0.90
 CONGESTION_ACCIDENT_FACTOR = 0.01
 PURCHASES_PER_DRIVING_TRIP = 4
+ACCIDENT_GROUPS = 4
 
 
 class System:
@@ -49,7 +50,14 @@ class System:
         commuters = int(employed * commute_rate) + shopping_trips
         congestion = min(1.0, commuters / (ROAD_CAPACITY * capacity_factor))
         accident_risk = base_risk + congestion * CONGESTION_ACCIDENT_FACTOR
-        accidents = sum(town.rng.random() < accident_risk for _ in range(commuters))
+        # Always sample four balanced trip groups, including empty groups.
+        accidents = 0
+        for group in range(ACCIDENT_GROUPS):
+            trips = commuters // ACCIDENT_GROUPS + (group < commuters % ACCIDENT_GROUPS)
+            expected_accidents = trips * accident_risk
+            rounded = int(expected_accidents)
+            rounded += town.rng.random() < expected_accidents - rounded
+            accidents += rounded
         town.state[self.name] = {
             "commuters": commuters,
             "congestion": congestion,

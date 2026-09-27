@@ -58,13 +58,29 @@ by weather-adjusted capacity, capped at **1.0** (zero demand gives **0.0**).
 | snow | 0.6 | 0.010 |
 | storm | 0.5 | 0.015 |
 
-Each commuter independently has at most one accident, with probability
-`base_probability + 0.01 * congestion`. Thus risk stays between **0.002 and
-0.025**. These are illustrative simulation constants, not calibrated forecasts.
+Accident risk remains `base_probability + 0.01 * congestion`, between
+**0.002 and 0.025**. Trips are divided into **four** balanced integer groups (quotient plus one
+for each remainder trip). Each group has expected
+accidents `group_trips * risk`. Stochastic rounding chooses the floor of each
+expectation, plus one when its uniform draw is below its fractional part.
+The four rounded counts are added. This preserves the expected accident count but
+has lower variance than independent per-commuter trials: each group count is
+the floor or ceiling of its expectation. The total remains bounded by zero and
+commuters. Independent rounding of the four groups permits more variation than
+rounding the combined expectation once.
+These are illustrative simulation constants, not calibrated forecasts.
 Accidents do not feed back into same-day congestion.
 
-Only `town.rng` is used: one uniform draw per tick (even at zero employment),
-then one random draw per commuter. Runtime is linear in commuters. Equal initial
+Only `town.rng` is used: exactly **five draws every tick**: one uniform draw for
+the commute share, then four random draws for accident groups, even with an
+empty group or an integer expectation. Setup consumes no draws.
+Traffic volume therefore cannot shift the RNG position directly for later
+systems. Downstream systems may still consume different draws in response to
+changed state. This new schedule changes historical seeded output once; it
+does not preserve the old per-commuter sequence. Four groups were selected during traffic-only seed-42 acceptance tuning;
+this is a simulation parameter, not a calibrated traffic statistic. Accident
+sampling takes constant time; counting residents and purchases remains linear in their input sizes.
+Equal initial
 state, shared RNG seed (normally **42**), upstream inputs, and system execution
 order produce identical output and events. Installing other RNG-consuming
 systems can change traffic results even with the same seed.
@@ -78,3 +94,25 @@ python3 -m unittest discover -s bao/tinytown -t .
 ```
 
 Tests use a small fake town, with no dependency on another owner's package.
+
+### Phase 2 combined acceptance (fixed-draw rework)
+
+Combined archive of `origin/main` at `7096e4de` plus this traffic package,
+seed 42, 90 days: **6/6 shops open**, average wallet **$500.88**. Every shop
+had **zero days at $0** and a maximum zero-balance streak of **0**. All daily
+traffic bounds passed. The runner completed all 90 days. Temporary trees were
+created in `$TMPDIR` and deleted afterward. Thirteen standalone tests passed,
+including a counting RNG regression across missing/resident inputs, varying
+traffic volumes and every weather condition.
+
+| Shop | Final balance | Units sold |
+| --- | ---: | ---: |
+| Spoke & Spanner | $17,635.00 | 452 |
+| Bench & Bell | $14,856.20 | 452 |
+| One Mug Tea | $3,217.90 | 2710 |
+| Strawberry Daifuku Cart | $1,716.00 | 2778 |
+| Matcha Mile | $1,415.00 | 1763 |
+| Fold Post | $1,057.70 | 595 |
+
+These acceptance results are specific to this combined tree and seed; they do
+not guarantee the same weather or balances for other seeds or system changes.

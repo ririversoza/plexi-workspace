@@ -70,8 +70,13 @@ class TrafficTests(unittest.TestCase):
         expected_rng = random.Random(42)
         expected_trips = int(100 * expected_rng.uniform(0.65, 0.90)) + 2
         expected_risk = 0.002 + expected_trips / 500 * 0.01
-        expected_accidents = sum(expected_rng.random() < expected_risk
-                                 for _ in range(expected_trips))
+        expected_accidents = 0
+        for group in range(4):
+            trips = expected_trips // 4 + (group < expected_trips % 4)
+            expected_count = trips * expected_risk
+            expected_accidents += int(expected_count) + (
+                expected_rng.random() < expected_count - int(expected_count)
+            )
         system.tick(town)
         self.assertEqual(town.state["traffic"], {
             "commuters": expected_trips, "congestion": expected_trips / 500,
@@ -111,6 +116,60 @@ class TrafficTests(unittest.TestCase):
                 self.assertTrue(710 <= row["commuters"] <= 960)
                 self.assertTrue(0 <= row["congestion"] <= 1)
                 self.assertTrue(0 <= row["accidents_today"] <= row["commuters"])
+
+    def test_fixed_rng_draw_count_per_tick(self):
+        class CountingRandom(random.Random):
+            def __init__(self):
+                super().__init__(42)
+                self.draws = 0
+
+            def random(self):
+                self.draws += 1
+                return super().random()
+
+        for condition in ("sun", "cloud", "rain", "snow", "storm"):
+            town = FakeTown({"weather": {"condition": condition}})
+            town.rng = CountingRandom()
+            system = System()
+            system.setup(town)
+            self.assertEqual(town.rng.draws, 0)
+            inputs = [None, {}, {"people": [{"job": "out-of-town"}] * 94},
+                      {"purchases": {"a": 240}},
+                      {"people": [{"job": "fold-post"}], "purchases": {"a": 3}}]
+            for residents in inputs:
+                for employed in (0, 1, 100, 10000):
+                    town.state["economy"] = {"employed": employed}
+                    if residents is None:
+                        town.state.pop("residents", None)
+                    else:
+                        town.state["residents"] = residents
+                    before = town.rng.draws
+                    system.tick(town)
+                    self.assertEqual(town.rng.draws - before, 5)
+
+    def test_accident_rounding_threshold_and_zero_traffic(self):
+        class FixedRandom:
+            def __init__(self, accident_draw):
+                self.accident_draw = accident_draw
+
+            def uniform(self, low, high):
+                return 0.8
+
+            def random(self):
+                return self.accident_draw
+
+        # 80 trips split into four groups: each expects 20 * .0036 = .072.
+        for draw, expected in ((0.0, 4), (0.071, 4), (0.073, 0), (0.999, 0)):
+            town = FakeTown({"economy": {"employed": 100}})
+            town.rng = FixedRandom(draw)
+            System().setup(town)
+            System().tick(town)
+            self.assertEqual(town.state["traffic"]["accidents_today"], expected)
+        town = FakeTown()
+        town.rng = FixedRandom(0.0)
+        System().setup(town)
+        System().tick(town)
+        self.assertEqual(town.state["traffic"]["accidents_today"], 0)
 
     def test_runs_alone(self):
         town, history = simulate()
