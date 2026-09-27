@@ -7,13 +7,11 @@ write one static HTML file to ``--out``. Read-only: no extra ``town.rng`` draws.
 from __future__ import annotations
 
 import argparse
-import copy
 import html
-import importlib
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
@@ -22,10 +20,17 @@ if str(_ROOT) not in sys.path:
 from taro.tinytown.engine import (  # noqa: E402
     DEFAULT_DAYS,
     DEFAULT_SEED,
-    SYSTEM_MODULES,
     run_town,
 )
+from taro.tinytown.run import (  # noqa: E402
+    _SHOP_EXPORT_FIELDS,
+    _count_events_by_kind,
+    _load_systems,
+    _snapshot_day,
+    validate_export_path,
+)
 
+# Re-export so tests/callers can assert we share the runner schema helpers.
 __all__ = [
     "build_parser",
     "cli",
@@ -35,6 +40,7 @@ __all__ = [
     "parse_args",
     "render_html",
     "write_dashboard",
+    "_SHOP_EXPORT_FIELDS",
 ]
 
 # Weather strip colours (condition -> fill). No external assets.
@@ -44,6 +50,7 @@ _WEATHER_FILL = {
     "rain": "#4a90c8",
     "snow": "#c5d5e4",
     "storm": "#6b4f9a",
+    "n/a": "#d8dde3",
 }
 
 # Stable palette for shop lines (cycled if more shops appear).
@@ -57,81 +64,6 @@ _SHOP_STROKES = (
     "#b08d57",
     "#4f5d75",
 )
-
-_SHOP_EXPORT_FIELDS = (
-    "open",
-    "price_cents",
-    "available",
-    "balance_cents",
-    "sold_yesterday",
-)
-
-
-def _load_systems(*, disable_log_files: bool = True) -> List[Any]:
-    """Load installed systems; disable log CSV by default for dashboard runs."""
-    loaded: List[Any] = []
-    for name, module_path in SYSTEM_MODULES.items():
-        try:
-            module = importlib.import_module(module_path)
-        except ImportError:
-            continue
-        system_cls = getattr(module, "System", None)
-        if system_cls is None:
-            continue
-        if name == "log" and disable_log_files:
-            loaded.append(system_cls(csv_path=None))
-        else:
-            loaded.append(system_cls())
-    return loaded
-
-
-def _snapshot_day(town: Any) -> Dict[str, Any]:
-    """Compact end-of-day snapshot (mirrors export schema; no RNG draws)."""
-    entry: Dict[str, Any] = {"day": town.day}
-
-    for key in ("weather", "economy", "traffic", "emergency"):
-        state = town.state.get(key)
-        if isinstance(state, dict):
-            entry[key] = copy.deepcopy(state)
-
-    businesses = town.state.get("businesses")
-    if isinstance(businesses, dict):
-        shops_out: Dict[str, Dict[str, Any]] = {}
-        shops = businesses.get("shops") or {}
-        if isinstance(shops, dict):
-            for shop_id, shop in shops.items():
-                if not isinstance(shop, dict):
-                    continue
-                shops_out[str(shop_id)] = {
-                    field: shop.get(field) for field in _SHOP_EXPORT_FIELDS
-                }
-        entry["businesses"] = shops_out
-
-    residents = town.state.get("residents")
-    if isinstance(residents, dict):
-        people = {
-            "count": residents.get("count"),
-            "employed": residents.get("employed"),
-            "avg_wallet_cents": residents.get("avg_wallet_cents"),
-        }
-        if "avg_mood" in residents:
-            people["avg_mood"] = residents.get("avg_mood")
-        if "mood_bands" in residents:
-            people["mood_bands"] = residents.get("mood_bands")
-        entry["residents"] = people
-
-    return entry
-
-
-def _count_events_by_kind(town: Any) -> Dict[str, int]:
-    counts: Dict[str, int] = {}
-    for event in getattr(town, "events", []):
-        system = event.get("system")
-        system_key = "" if system is None else str(system)
-        kind = str(event.get("kind", ""))
-        key = f"{system_key}.{kind}"
-        counts[key] = counts.get(key, 0) + 1
-    return counts
 
 
 def collect_timeline(
@@ -178,10 +110,29 @@ def _esc(text: Any) -> str:
     return html.escape(str(text), quote=True)
 
 
-def _series_shop_balances(daily: Sequence[Dict[str, Any]]) -> Dict[str, List[float]]:
-    """shop_id -> balance dollars per day (None days as gaps skipped as 0-length)."""
-    series: Dict[str, List[float]] = {}
+def _series_shop_balances(
+    daily: Sequence[Dict[str, Any]],
+) -> Dict[str, List[Optional[float]]]:
+    """shop_id -> balance dollars per day; missing days are ``None`` gaps.
+
+    A shop that first appears mid-run is gapped at the *front* so the line
+    does not invent day-1 history (pad/gap at the front, not the end).
+    """
+    n = len(daily)
+    order: List[str] = []
+    seen: set = set()
     for entry in daily:
+        shops = entry.get("businesses") or {}
+        if not isinstance(shops, dict):
+            continue
+        for shop_id in shops:
+            sid = str(shop_id)
+            if sid not in seen:
+                seen.add(sid)
+                order.append(sid)
+
+    series: Dict[str, List[Optional[float]]] = {sid: [None] * n for sid in order}
+    for index, entry in enumerate(daily):
         shops = entry.get("businesses") or {}
         if not isinstance(shops, dict):
             continue
@@ -190,39 +141,34 @@ def _series_shop_balances(daily: Sequence[Dict[str, Any]]) -> Dict[str, List[flo
                 continue
             cents = shop.get("balance_cents")
             try:
-                dollars = int(cents) / 100.0
+                dollars: Optional[float] = int(cents) / 100.0
             except (TypeError, ValueError):
-                dollars = 0.0
-            series.setdefault(str(shop_id), []).append(dollars)
-    # Pad shorter series (shouldn't happen) to len(daily)
-    n = len(daily)
-    for shop_id, values in list(series.items()):
-        if len(values) < n:
-            values.extend([values[-1] if values else 0.0] * (n - len(values)))
+                dollars = None
+            series[str(shop_id)][index] = dollars
     return series
 
 
-def _series_avg_wallet(daily: Sequence[Dict[str, Any]]) -> List[float]:
-    out: List[float] = []
+def _series_avg_wallet(daily: Sequence[Dict[str, Any]]) -> List[Optional[float]]:
+    out: List[Optional[float]] = []
     for entry in daily:
         residents = entry.get("residents") or {}
         cents = residents.get("avg_wallet_cents") if isinstance(residents, dict) else None
         try:
             out.append(int(cents) / 100.0)
         except (TypeError, ValueError):
-            out.append(0.0)
+            out.append(None)
     return out
 
 
-def _series_congestion(daily: Sequence[Dict[str, Any]]) -> List[float]:
-    out: List[float] = []
+def _series_congestion(daily: Sequence[Dict[str, Any]]) -> List[Optional[float]]:
+    out: List[Optional[float]] = []
     for entry in daily:
         traffic = entry.get("traffic") or {}
         value = traffic.get("congestion") if isinstance(traffic, dict) else None
         try:
             out.append(float(value))
         except (TypeError, ValueError):
-            out.append(0.0)
+            out.append(None)
     return out
 
 
@@ -231,36 +177,54 @@ def _weather_conditions(daily: Sequence[Dict[str, Any]]) -> List[str]:
     for entry in daily:
         weather = entry.get("weather") or {}
         cond = weather.get("condition") if isinstance(weather, dict) else None
-        out.append(str(cond or "cloud"))
+        if cond is None or cond == "":
+            out.append("n/a")
+        else:
+            out.append(str(cond))
     return out
 
 
-def _polyline(
-    values: Sequence[float],
+def _polyline_segments(
+    values: Sequence[Optional[float]],
     *,
     width: float,
     height: float,
     pad: float,
     y_min: float,
     y_max: float,
-) -> str:
-    """Build an SVG polyline points string."""
+) -> List[str]:
+    """Build SVG polyline point strings, one per contiguous non-None run."""
     n = len(values)
     if n == 0:
-        return ""
+        return []
     inner_w = max(width - 2 * pad, 1.0)
     inner_h = max(height - 2 * pad, 1.0)
     span = y_max - y_min if y_max > y_min else 1.0
+    segments: List[str] = []
     pts: List[str] = []
+
+    def flush() -> None:
+        nonlocal pts
+        if len(pts) >= 2:
+            segments.append(" ".join(pts))
+        elif len(pts) == 1:
+            # Degenerate segment so a lone day still paints a mark.
+            segments.append(f"{pts[0]} {pts[0]}")
+        pts = []
+
     for i, value in enumerate(values):
+        if value is None:
+            flush()
+            continue
         x = pad + (inner_w * i / max(n - 1, 1))
         y = pad + inner_h * (1.0 - (value - y_min) / span)
         pts.append(f"{x:.2f},{y:.2f}")
-    return " ".join(pts)
+    flush()
+    return segments
 
 
 def _line_chart_svg(
-    series: Dict[str, Sequence[float]],
+    series: Dict[str, Sequence[Optional[float]]],
     *,
     title: str,
     y_label: str,
@@ -269,16 +233,21 @@ def _line_chart_svg(
     pad: float = 36.0,
     colours: Optional[Sequence[str]] = None,
 ) -> str:
-    """Multi-series line chart as inline SVG."""
+    """Multi-series line chart as inline SVG (``None`` values become gaps)."""
     if not series:
         return (
             f'<div class="chart"><h3>{_esc(title)}</h3>'
             f'<p class="muted">No data</p></div>'
         )
 
-    all_vals = [v for values in series.values() for v in values]
-    y_min = min(all_vals) if all_vals else 0.0
-    y_max = max(all_vals) if all_vals else 1.0
+    all_vals = [v for values in series.values() for v in values if v is not None]
+    if not all_vals:
+        return (
+            f'<div class="chart"><h3>{_esc(title)}</h3>'
+            f'<p class="muted">No data</p></div>'
+        )
+    y_min = min(all_vals)
+    y_max = max(all_vals)
     if y_min == y_max:
         y_min -= 1.0
         y_max += 1.0
@@ -292,13 +261,18 @@ def _line_chart_svg(
     legend: List[str] = []
     for idx, (name, values) in enumerate(series.items()):
         colour = palette[idx % len(palette)]
-        points = _polyline(
-            values, width=float(width), height=float(height), pad=pad, y_min=y_min, y_max=y_max
-        )
-        lines_svg.append(
-            f'<polyline fill="none" stroke="{colour}" stroke-width="2" '
-            f'points="{points}" />'
-        )
+        for points in _polyline_segments(
+            values,
+            width=float(width),
+            height=float(height),
+            pad=pad,
+            y_min=y_min,
+            y_max=y_max,
+        ):
+            lines_svg.append(
+                f'<polyline fill="none" stroke="{colour}" stroke-width="2" '
+                f'points="{points}" />'
+            )
         legend.append(
             f'<span class="swatch" style="background:{colour}"></span>'
             f'<span class="legend-label">{_esc(name)}</span>'
@@ -651,6 +625,11 @@ def main(
 
 def cli(argv: Optional[Sequence[str]] = None) -> str:
     args = parse_args(argv)
+    try:
+        validate_export_path(args.out, flag="--out")
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
     return main(out=args.out, seed=args.seed, days=args.days, from_file=args.from_file)
 
 

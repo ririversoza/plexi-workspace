@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
+import taro.tinytown.dashboard as dash
+import taro.tinytown.run as run
 from taro.tinytown.dashboard import (
+    _series_avg_wallet,
+    _series_congestion,
+    _series_shop_balances,
+    _weather_conditions,
+    cli,
     collect_timeline,
     load_timeline,
     main,
@@ -103,6 +111,77 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(args.seed, 3)
         self.assertIsNone(args.from_file)
 
+    def test_imports_schema_helpers_from_run(self) -> None:
+        self.assertIs(dash._load_systems, run._load_systems)
+        self.assertIs(dash._snapshot_day, run._snapshot_day)
+        self.assertIs(dash._count_events_by_kind, run._count_events_by_kind)
+        self.assertIs(dash._SHOP_EXPORT_FIELDS, run._SHOP_EXPORT_FIELDS)
+
+    def test_shop_balance_series_gaps_at_front(self) -> None:
+        daily = [
+            {"day": 1, "businesses": {}},
+            {"day": 2, "businesses": {}},
+            {
+                "day": 3,
+                "businesses": {
+                    "late-shop": {
+                        "open": True,
+                        "price_cents": 100,
+                        "available": 1,
+                        "balance_cents": 500,
+                        "sold_yesterday": 0,
+                    }
+                },
+            },
+            {
+                "day": 4,
+                "businesses": {
+                    "late-shop": {
+                        "open": True,
+                        "price_cents": 100,
+                        "available": 1,
+                        "balance_cents": 600,
+                        "sold_yesterday": 0,
+                    }
+                },
+            },
+        ]
+        series = _series_shop_balances(daily)
+        self.assertEqual(series["late-shop"], [None, None, 5.0, 6.0])
+
+    def test_missing_wallet_congestion_weather_are_gaps(self) -> None:
+        daily = [
+            {"day": 1},
+            {
+                "day": 2,
+                "weather": {"condition": "sun"},
+                "traffic": {"congestion": 0.4},
+                "residents": {"avg_wallet_cents": 2500},
+            },
+            {"day": 3, "weather": {}, "traffic": {}, "residents": {}},
+        ]
+        self.assertEqual(_series_avg_wallet(daily), [None, 25.0, None])
+        self.assertEqual(_series_congestion(daily), [None, 0.4, None])
+        self.assertEqual(_weather_conditions(daily), ["n/a", "sun", "n/a"])
+        html = render_html(
+            {"seed": 1, "days": 3, "systems": [], "daily": daily, "events_by_kind": {}}
+        )
+        self.assertIn("n/a", html)
+
+    def test_cli_out_bad_path_exits_2(self) -> None:
+        with self.assertRaises(SystemExit) as ctx:
+            cli(["--out", "   "])
+        self.assertEqual(ctx.exception.code, 2)
+
+        with self.assertRaises(SystemExit) as ctx2:
+            cli(["--out", "/no/such/parent/dash.html"])
+        self.assertEqual(ctx2.exception.code, 2)
+
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as tmp:
+            with self.assertRaises(SystemExit) as ctx3:
+                cli(["--out", tmp])
+            self.assertEqual(ctx3.exception.code, 2)
+
     def test_render_html_looks_valid_and_safe(self) -> None:
         html = render_html(_tiny_timeline())
         lower = html.lower()
@@ -127,7 +206,7 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(render_html(timeline), render_html(timeline))
 
     def test_write_only_to_out_and_from_file(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as tmp:
             out = str(Path(tmp) / "dash.html")
             src = str(Path(tmp) / "town.json")
             Path(src).write_text(json.dumps(_tiny_timeline()))
@@ -151,7 +230,7 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn("<script src", html_a.lower())
 
     def test_write_dashboard_helper(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as tmp:
             path = str(Path(tmp) / "out.html")
             write_dashboard(path, _tiny_timeline())
             text = Path(path).read_text()
