@@ -126,6 +126,58 @@ mean = BASE_DAILY_DEMAND * (LIST_PRICE / p) ** ELASTICITY
 3. `supply` restock (capped by cash after overhead).
 4. `sale` revenue from drinks sold that day.
 
+## Sensitivity
+
+Honesty check for the PIP follow-up: a small override-only script in `$TMPDIR`
+temporarily sets `BASE_DAILY_DEMAND` (or the seed) on the imported module, runs
+the same 90-day loop, then restores the defaults. Defaults and `RESULTS.md`
+were not changed.
+
+**Plainly:** at seed 42 the cart **stops clearing $500 when `BASE_DAILY_DEMAND`
+falls to 8** (final `$426.76`). `BASE=9` still clears (`$751.70`). Within the
+requested sweeps — demand 10 / 12 / 14 at seed 42, and seeds 1–10 at default
+demand 14 — every case still clears $500.
+
+Exact stdout from `python3 "$TMPDIR/nori_sensitivity.py"` (run from the repo
+root after writing the script into `$TMPDIR`):
+
+```
+Matcha Mile sensitivity (overrides only; defaults unchanged)
+Defaults: BASE_DAILY_DEMAND=14.0, seed=42, days=90
+
+## BASE_DAILY_DEMAND sweep (seed=42)
+  BASE_DAILY_DEMAND=  10  final=$1,088.73  clears_$500=yes
+  BASE_DAILY_DEMAND=  12  final=$1,730.55  clears_$500=yes
+  BASE_DAILY_DEMAND=  14  final=$2,388.49  clears_$500=yes
+
+## Seeds 1–10 (default BASE_DAILY_DEMAND)
+  seed= 1  final=$2,368.21  clears_$500=yes
+  seed= 2  final=$1,930.26  clears_$500=yes
+  seed= 3  final=$2,111.24  clears_$500=yes
+  seed= 4  final=$2,385.71  clears_$500=yes
+  seed= 5  final=$2,554.63  clears_$500=yes
+  seed= 6  final=$2,443.26  clears_$500=yes
+  seed= 7  final=$2,341.93  clears_$500=yes
+  seed= 8  final=$2,627.82  clears_$500=yes
+  seed= 9  final=$2,275.50  clears_$500=yes
+  seed=10  final=$2,334.15  clears_$500=yes
+
+## Threshold probe (seed=42, lower BASE until final < $500)
+  BASE_DAILY_DEMAND=  14  final=$2,388.49  clears
+  BASE_DAILY_DEMAND=  13  final=$2,059.52  clears
+  BASE_DAILY_DEMAND=  12  final=$1,730.55  clears
+  BASE_DAILY_DEMAND=  11  final=$1,409.64  clears
+  BASE_DAILY_DEMAND=  10  final=$1,088.73  clears
+  BASE_DAILY_DEMAND=   9  final=$751.70  clears
+  BASE_DAILY_DEMAND=   8  final=$426.76  FAILS
+
+## Where it stops clearing $500
+  Requested sweeps (BASE in {10,12,14} at seed 42; seeds 1–10 at default BASE=14): every case still clears $500.
+  Plainly: at seed 42 the cart stops clearing $500 when BASE_DAILY_DEMAND falls to 8 (final=$426.76). BASE=9 still clears (final=$751.70).
+
+Default check (BASE=14, seed=42): final=$2,388.49
+```
+
 ## Reproduce
 
 From the repo root:
