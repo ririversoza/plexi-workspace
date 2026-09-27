@@ -75,7 +75,7 @@ class ResidentsTests(unittest.TestCase):
         weekdays = sum((day - 1) % 7 < 5 for day in range(1, 91))
         for before, after in zip(initial, self.town.state["residents"]["people"]):
             self.assertEqual(after["wallet_cents"], before["wallet_cents"] +
-                             (weekdays * 3000 if before["job"] == "out-of-town" else 0))
+                             (weekdays * 2000 if before["job"] == "out-of-town" else 0))
 
     def test_bounds_and_money_conservation_and_read_only_inputs(self):
         town = self.town
@@ -91,7 +91,7 @@ class ResidentsTests(unittest.TestCase):
             for old, new in zip(before, state["people"]):
                 wage = inputs["businesses"]["wages_paid"].get(old["id"], 0)
                 if (day - 1) % 7 < 5 and old["job"] == "out-of-town":
-                    wage += 3000
+                    wage += 2000
                 self.assertIn(old["wallet_cents"] + wage - new["wallet_cents"], (0, 500, 1000))
                 self.assertIs(type(new["wallet_cents"]), int)
                 self.assertGreaterEqual(new["wallet_cents"], 0)
@@ -100,7 +100,7 @@ class ResidentsTests(unittest.TestCase):
                 self.assertTrue(0 < units <= 5)
                 self.assertEqual(state["spent_cents"][shop], units * 500)
             total = sum(p["wallet_cents"] for p in state["people"])
-            wage_total = 740 + (282000 if (day - 1) % 7 < 5 else 0)
+            wage_total = 740 + (188000 if (day - 1) % 7 < 5 else 0)
             self.assertEqual(total, sum(p["wallet_cents"] for p in before) + wage_total - sum(state["spent_cents"].values()))
             self.assertEqual(state["avg_wallet_cents"], total // 120)
             self.assertEqual({k: v for k, v in town.state.items() if k != "residents"}, inputs)

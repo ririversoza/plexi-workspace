@@ -10,7 +10,7 @@ FIRST_NAMES = (
 )
 LAST_NAMES = ("Ash", "Bell", "Chen", "Diaz", "Elm", "Fox", "Green", "Hill")
 STREETS = ("Clover Lane", "Maple Street", "Orchard Road", "Willow Way")
-WEEKDAY_WAGE_CENTS = 3000
+WEEKDAY_WAGE_CENTS = 2000
 HEALTHY_WALLET_CENTS = 10000
 STAFF_COUNTS = {shop: 2 if shop in ("bench-and-bell", "spoke-and-spanner") else 1
                 for shop in SHOP_IDS}
