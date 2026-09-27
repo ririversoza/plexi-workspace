@@ -26,20 +26,28 @@ Week N covers days `7(N-1)+1` to `7N`. A 90-day run has 13 weeks, and week 13 is
 | Headline | rules below |
 | Weather | count of each `weather.condition`, plus the `temp_c` range |
 | Shop table | per shop: days `open`, units sold (sum of daily `residents.purchases`; an empty dict counts as 0, and `?` means residents never reported purchases), and `balance_cents` on the last day of the week |
+| Prices* | each `price_change` event this week: `Shop $old -> $new` |
 | Wallets | `residents.count` and `avg_wallet_cents` on the last day, plus the change since the end of last week |
-| Streets | the week's total `traffic.accidents_today` and average `congestion`, and total `emergency.incidents_today` / `responded` |
+| Mood of the town* | `residents.avg_mood` on the last day and its change since the end of last week, plus each `mood_bands` count and its change |
+| Traffic / Emergency | the week's total `traffic.accidents_today` and average `congestion`, and total `emergency.incidents_today` / `responded`. When `traffic.bus_running` is present, it adds `bus ran N days (R riders)` (sum of `bus_riders`) or `no bus` |
+| Streets* | the street with the most incidents this week (sum of daily `emergency.incidents_by_street`, ties go to the name that sorts first), or `no incidents on any street` |
+| Town Hall* | projects completed this week (new names in `economy.projects_completed` since the end of last week) and the current `economy.project` with progress rounded down to a whole percent, or `no project under way` |
+
+\* Optional Phase 3 sections. Each prints only when its keys (or, for Prices, `price_change` events that week) are there, so a week without them renders byte-for-byte as it did before. Prices only lists actual moves, so a week where no price changed has no Prices line.
 
 ## Headline rules
 
 The first rule that fires wins:
 
-1. **Accident spike:** at least 8 accidents in the week (`ACCIDENT_SPIKE`).
-2. **Storm closures:** any day with a `shops_closed` event whose reason is `storm`, or with a storm and `businesses.open_count == 0`. The headline says how many days.
-3. **Treasury change:** `economy.treasury` fell, or rose by at least $100 (`TREASURY_SWING_DOLLARS`), since the end of last week. Week 1 measures from day 1.
-4. **Best seller:** the shop with the most units sold that week. A tie goes to the shop id that sorts first.
-5. **Quiet week:** when nothing above fires, or no system reports anything.
+1. **Project completed:** a public works project finished this week (`TOWN OPENS NEW PARK`).
+2. **Accident spike:** at least 8 accidents in the week (`ACCIDENT_SPIKE`).
+3. **Mood swing:** `residents.avg_mood` moved at least 10 points since the end of last week (`MOOD_SWING`). Week 1 measures from day 1.
+4. **Storm closures:** any day with a `shops_closed` event whose reason is `storm`, or with a storm and `businesses.open_count == 0`. The headline says how many days.
+5. **Treasury change:** `economy.treasury` fell, or rose by at least $100 (`TREASURY_SWING_DOLLARS`), since the end of last week. Week 1 measures from day 1.
+6. **Best seller:** the shop with the most units sold that week. A tie goes to the shop id that sorts first.
+7. **Quiet week:** when nothing above fires, or no system reports anything.
 
-At seed 42, the 13 issues cover the accident spike (week 4), storm closures, and best sellers. The treasury rule fires only in weeks without a storm or spike where money dropped or jumped $100.
+Rules 1 and 3 need the Phase 3 keys, so without them the headlines are exactly the Phase 2 ones. At seed 42 on today's main, the 13 issues cover project openings (park in week 4, bike lane in week 8), mood swings (weeks 9, 10 and 12), storm closures and best sellers. The bus never runs at seed 42, because congestion never goes above 0.6.
 
 ## Missing systems
 
@@ -51,4 +59,4 @@ Every section falls back to "no reporter on this beat yet" when its system isn't
 python3 -m unittest discover -s sora/gazette -t .
 ```
 
-The tests cover identical output across runs, all 13 issues printed, read-only behaviour (RNG state, events and final state unchanged), no files written (run inside a temporary directory), week bounds (full coverage, the short last week, out-of-range rejection), zero systems, weather only, malformed state, and each headline rule in priority order.
+The tests cover a golden Phase 2 issue that must stay byte-identical, each Phase 3 section with its keys present and absent, the project-completion and mood-swing headlines, identical output across runs, all 13 issues printed, read-only behaviour (RNG state, events and final state unchanged), no files written (run inside a temporary directory), week bounds (full coverage, the short last week, out-of-range rejection), zero systems, weather only, malformed state, and each headline rule in priority order.
