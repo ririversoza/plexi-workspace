@@ -108,10 +108,12 @@ def treasury_change(days, before):
 
 
 def units_sold(days):
-    sold = Counter()
+    """Units per shop, or None if no day reported purchases (an empty dict counts as 0)."""
+    sold = None
     for d in days:
         purchases = get(d, "residents", "purchases")
         if isinstance(purchases, dict):
+            sold = sold if sold is not None else Counter()
             sold.update({shop: units for shop, units in purchases.items() if num(units) is not None})
     return sold
 
@@ -146,8 +148,7 @@ def headline(days, events, before=None):
 
 
 def weather_line(days):
-    conditions = Counter(get(d, "weather", "condition") for d in days)
-    conditions.pop(None, None)
+    conditions = Counter(c for c in (get(d, "weather", "condition") for d in days) if isinstance(c, str))
     if not conditions:
         return f"Weather: {NOT_REPORTED}"
     summary = ", ".join(f"{n} {c}" for c, n in sorted(conditions.items(), key=lambda item: (-item[1], item[0])))
@@ -165,7 +166,7 @@ def shop_table(days):
     for shop_id in order:
         shop = as_dict(shops[shop_id])
         open_days = sum(1 for d in days if as_dict(as_dict(get(d, "businesses", "shops")).get(shop_id)).get("open"))
-        units = sold.get(shop_id, 0) if sold else "?"
+        units = "?" if sold is None else sold.get(shop_id, 0)
         name = str(shop.get("name", shop_id))[:25]
         rows.append(f"{name:<26}{open_days:>4}d{units:>6}{cents(shop.get('balance_cents')):>13}")
     return rows

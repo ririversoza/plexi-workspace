@@ -11,12 +11,14 @@ from sora.gazette import (
     WEEKS,
     collect,
     headline,
+    shop_table,
     load_systems,
     main,
     render,
     snapshot,
     week_number,
     week_of,
+    weather_line,
 )
 
 
@@ -93,6 +95,22 @@ class MissingSystemsTest(unittest.TestCase):
             [day(1, businesses={"shops": ["one-mug-tea"]}, weather="storm", traffic={"congestion": "high"})],
         ):
             self.assertIn("Week 1", render(days, [], [1]))
+
+
+    def test_known_zero_sales_print_zero(self):
+        shops = {"one-mug-tea": {"name": "One Mug Tea", "open": True, "balance_cents": 100}}
+        days = [day(n, residents={"purchases": {}}, businesses={"shops": shops}) for n in range(1, 8)]
+        self.assertRegex(shop_table(days)[1], r"^One Mug Tea\s+7d\s+0\s")
+
+    def test_missing_sales_print_question_mark(self):
+        shops = {"one-mug-tea": {"name": "One Mug Tea", "open": True, "balance_cents": 100}}
+        self.assertRegex(shop_table([day(1, businesses={"shops": shops})])[1], r"\s\?\s")
+
+    def test_malformed_weather_falls_back(self):
+        for weather in ({"condition": []}, {"condition": {}}, {}, {"condition": 3}, []):
+            self.assertEqual(weather_line([day(1, weather=weather)]), f"Weather: {NOT_REPORTED}")
+        mixed = [day(1, weather={"condition": []}), day(2, weather={"condition": "sun"})]
+        self.assertEqual(weather_line(mixed), "Weather: 1 sun")
 
 
 class HeadlineTest(unittest.TestCase):

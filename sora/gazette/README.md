@@ -25,7 +25,7 @@ Week N covers days `7(N-1)+1` to `7N`. A 90-day run has 13 weeks, and week 13 is
 |---|---|
 | Headline | rules below |
 | Weather | count of each `weather.condition`, plus the `temp_c` range |
-| Shop table | per shop: days `open`, units sold (sum of daily `residents.purchases`), and `balance_cents` on the last day of the week |
+| Shop table | per shop: days `open`, units sold (sum of daily `residents.purchases`; an empty dict counts as 0, and `?` means residents never reported purchases), and `balance_cents` on the last day of the week |
 | Wallets | `residents.count` and `avg_wallet_cents` on the last day, plus the change since the end of last week |
 | Streets | the week's total `traffic.accidents_today` and average `congestion`, and total `emergency.incidents_today` / `responded` |
 
