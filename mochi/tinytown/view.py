@@ -1,6 +1,9 @@
 """Tiny Town viewer: run the town in-process and draw an ASCII snapshot of a day.
 
-    python3 -m mochi.tinytown.view [--day N] [--every]
+    python3 -m mochi.tinytown.view [--day N | --every | --history SHOP_ID|all] [--seed N]
+
+``--history`` charts each shop's balance instead (see ``history.py``); ``--seed`` picks
+another town.
 
 Runs every installed system through ``taro.tinytown`` (seed 42, 90 days) and draws
 day N (default 90), or every day with ``--every``. Anything not installed yet is
@@ -11,6 +14,8 @@ writes ``events.csv``.
 import argparse
 import importlib
 import sys
+
+from mochi.tinytown import history
 
 DAYS = 90
 SEED = 42
@@ -233,22 +238,45 @@ def load_systems(modules):
     return systems
 
 
-def run(show_day, days=DAYS, seed=SEED):
-    """Run the town and return rendered frames: just ``show_day``, or every day if None."""
+def run_engine(on_day, days=DAYS, seed=SEED):
+    """Run every installed system through ``taro.tinytown``, calling ``on_day(town)`` daily.
+
+    The viewer only reads ``town.state`` in ``on_day``: it makes no ``town.rng`` draws.
+    """
     try:
         engine = importlib.import_module("taro.tinytown")
     except ImportError:
         raise SystemExit(f"view: the engine (taro.tinytown) is {NOT_BUILT}")
+    # Use the engine's own catalog, so only systems this engine version ticks are loaded.
+    systems = load_systems(engine.SYSTEM_MODULES)
+    return engine.run_town(systems, days=days, seed=seed, on_day=on_day)
+
+
+def run(show_day, days=DAYS, seed=SEED):
+    """Run the town and return rendered frames: just ``show_day``, or every day if None."""
     frames = []
 
     def on_day(town):
         if show_day is None or town.day == show_day:
             frames.append(render(town.state, town.day, days))
 
-    # Use the engine's own catalog, so only systems this engine version ticks are loaded.
-    systems = load_systems(engine.SYSTEM_MODULES)
-    engine.run_town(systems, days=days, seed=seed, on_day=on_day)
+    run_engine(on_day, days, seed)
     return frames
+
+
+def run_history(target, days=DAYS, seed=SEED):
+    """Balance charts for ``target`` (a shop id or "all"). Returns ``(text, exit_code)``."""
+    frames = []
+    run_engine(lambda town: frames.append((town.day, history.snapshot(town.state, town.day))), days, seed)
+    if all(shops is None for _, shops in frames):
+        return f"history: businesses {NOT_BUILT}", 0
+    shop_ids = history.known_shops(frames, SHOP_IDS)
+    if target != "all" and target not in shop_ids:
+        known = ", ".join(shop_ids) or "(none)"
+        return f"history: no shop {target!r} in this town. Known: {known}, or all", 2
+    wanted = shop_ids if target == "all" else [target]
+    charts = [history.chart(sid, *history.series_for(frames, sid), days, seed) for sid in wanted]
+    return "\n\n".join(charts), 0
 
 
 def day_number(text):
@@ -264,13 +292,19 @@ def day_number(text):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="python3 -m mochi.tinytown.view",
-        description=f"Run Tiny Town (seed {SEED}, {DAYS} days) and draw it as ASCII.",
+        description=f"Run Tiny Town ({DAYS} days) and draw it as ASCII.",
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--day", type=day_number, default=DAYS, help=f"day to draw, 1..{DAYS} (default {DAYS})")
     group.add_argument("--every", action="store_true", help=f"draw all {DAYS} days in sequence")
+    group.add_argument("--history", metavar="SHOP_ID|all", help="chart shop balances over all days")
+    parser.add_argument("--seed", type=int, default=SEED, help=f"town seed (default {SEED})")
     args = parser.parse_args(argv)
-    print("\n\n".join(run(None if args.every else args.day)))
+    if args.history is not None:
+        text, code = run_history(args.history, seed=args.seed)
+        print(text, file=sys.stderr if code else sys.stdout)
+        return code
+    print("\n\n".join(run(None if args.every else args.day, seed=args.seed)))
     return 0
 
 
