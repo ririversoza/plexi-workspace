@@ -119,6 +119,54 @@ def sales_today(town: Town) -> Optional[int]:
     return None
 
 
+def tax_income_dollars(town: Town) -> Optional[float]:
+    """Economy tax income in dollars, or None when the key is absent."""
+    economy = town.state.get("economy")
+    if not isinstance(economy, dict) or "tax_income" not in economy:
+        return None
+    try:
+        return float(economy["tax_income"])
+    except (TypeError, ValueError):
+        return None
+
+
+def bills_paid_cents(town: Town) -> Optional[int]:
+    """Sum of residents + businesses ``bills_paid_cents``; None if both missing."""
+    total = 0
+    found = False
+    for name in ("residents", "businesses"):
+        state = town.state.get(name)
+        if isinstance(state, dict) and "bills_paid_cents" in state:
+            found = True
+            try:
+                total += int(state.get("bills_paid_cents") or 0)
+            except (TypeError, ValueError):
+                pass
+    return total if found else None
+
+
+def residents_in_arrears(town: Town) -> Optional[int]:
+    """Count of residents behind on bills, or None when the key is absent."""
+    residents = town.state.get("residents")
+    if not isinstance(residents, dict) or "in_arrears" not in residents:
+        return None
+    try:
+        return int(residents["in_arrears"])
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt_na(value: Any, *, dollars_from_cents: bool = False) -> str:
+    """Format a metric for display; missing values become ``n/a``."""
+    if value is None:
+        return "n/a"
+    if dollars_from_cents:
+        return format_dollars(value)
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
 def daily_summary(town: Town) -> str:
     """One-line snapshot of whatever state is present today."""
     parts: List[str] = [f"Day {town.day}"]
@@ -147,6 +195,15 @@ def daily_summary(town: Town) -> str:
             f"pop={economy.get('population')} employed={economy.get('employed')} "
             f"treasury={economy.get('treasury')} shops={economy.get('shops_open')}"
         )
+
+    # Phase 4: taxes / bills / arrears (n/a when keys are missing).
+    if residents is not None or businesses is not None or economy is not None:
+        parts.append(
+            f"tax_income={_fmt_na(tax_income_dollars(town))} "
+            f"bills_paid={_fmt_na(bills_paid_cents(town), dollars_from_cents=True)} "
+            f"arrears={_fmt_na(residents_in_arrears(town))}"
+        )
+
     traffic = town.state.get("traffic")
     if traffic is not None:
         parts.append(
@@ -254,6 +311,12 @@ def final_report(
         else:
             lines.append(f"{name}: {town.state[name]}")
 
+    lines.append(
+        "phase4: "
+        f"tax_income={_fmt_na(tax_income_dollars(town))} "
+        f"bills_paid={_fmt_na(bills_paid_cents(town), dollars_from_cents=True)} "
+        f"arrears={_fmt_na(residents_in_arrears(town))}"
+    )
     lines.extend(shop_leaderboard(town, units_sold=units_sold))
     return "\n".join(lines)
 
@@ -379,6 +442,9 @@ def run_seed_metrics(
         "max_zero_streak": max_zero,
         "avg_wallet_cents": avg_wallet,
         "treasury": treasury,
+        "tax_income": tax_income_dollars(town),
+        "bills_paid_cents": bills_paid_cents(town),
+        "in_arrears": residents_in_arrears(town),
         "pass": passed,
         "town": town,
         "systems": systems,
@@ -393,7 +459,8 @@ def format_seeds_table(rows: Sequence[Dict[str, Any]]) -> str:
     """Render the robustness table plus ``X of N seeds pass``."""
     header = (
         f"{'seed':>4}  {'shops':>5}  {'max_$0':>6}  "
-        f"{'avg_wallet':>10}  {'treasury':>10}  result"
+        f"{'avg_wallet':>10}  {'treasury':>10}  "
+        f"{'tax_inc':>8}  {'bills':>10}  {'arrears':>7}  result"
     )
     lines = [header]
     passed = 0
@@ -404,11 +471,14 @@ def format_seeds_table(rows: Sequence[Dict[str, Any]]) -> str:
         wallet_s = format_dollars(wallet) if wallet is not None else "?"
         treasury = row.get("treasury")
         treasury_s = "?" if treasury is None else str(treasury)
+        tax_s = _fmt_na(row.get("tax_income"))
+        bills_s = _fmt_na(row.get("bills_paid_cents"), dollars_from_cents=True)
+        arrears_s = _fmt_na(row.get("in_arrears"))
         result = "PASS" if row.get("pass") else "FAIL"
         lines.append(
             f"{int(row['seed']):>4}  {int(row['shops_open']):>5}  "
             f"{int(row['max_zero_streak']):>6}  {wallet_s:>10}  "
-            f"{treasury_s:>10}  {result}"
+            f"{treasury_s:>10}  {tax_s:>8}  {bills_s:>10}  {arrears_s:>7}  {result}"
         )
     total = len(rows)
     lines.append(f"{passed} of {total} seeds pass")
@@ -430,6 +500,9 @@ def run_seeds_report(
             "max_zero_streak": row["max_zero_streak"],
             "avg_wallet_cents": row["avg_wallet_cents"],
             "treasury": row["treasury"],
+            "tax_income": row["tax_income"],
+            "bills_paid_cents": row["bills_paid_cents"],
+            "in_arrears": row["in_arrears"],
             "pass": row["pass"],
             "zero_max_by_shop": row["zero_max_by_shop"],
             "avg_wallet_series_cents": row["avg_wallet_series_cents"],
@@ -469,7 +542,11 @@ def snapshot_day(town: Town) -> Dict[str, Any]:
                 shops_out[str(shop_id)] = {
                     field: shop.get(field) for field in _SHOP_EXPORT_FIELDS
                 }
-        entry["businesses"] = shops_out
+        biz_entry: Dict[str, Any] = {"shops": shops_out}
+        for key in ("taxes_paid_cents", "bills_paid_cents", "arrears_cents", "open_count"):
+            if key in businesses:
+                biz_entry[key] = businesses.get(key)
+        entry["businesses"] = biz_entry
 
     residents = town.state.get("residents")
     if isinstance(residents, dict):
@@ -478,10 +555,16 @@ def snapshot_day(town: Town) -> Dict[str, Any]:
             "employed": residents.get("employed"),
             "avg_wallet_cents": residents.get("avg_wallet_cents"),
         }
-        if "avg_mood" in residents:
-            people["avg_mood"] = residents.get("avg_mood")
-        if "mood_bands" in residents:
-            people["mood_bands"] = residents.get("mood_bands")
+        for key in (
+            "avg_mood",
+            "mood_bands",
+            "taxes_paid_cents",
+            "bills_paid_cents",
+            "arrears_cents",
+            "in_arrears",
+        ):
+            if key in residents:
+                people[key] = residents.get(key)
         entry["residents"] = people
 
     return entry

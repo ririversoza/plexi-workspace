@@ -289,6 +289,39 @@ class RunnerTests(unittest.TestCase):
         line = daily_summary(town)
         self.assertIn("residents=120 employed=90 avg_wallet=$25.00", line)
         self.assertIn("shops_open=5 sales=4", line)
+        self.assertIn("tax_income=n/a", line)
+        self.assertIn("bills_paid=n/a", line)
+        self.assertIn("arrears=n/a", line)
+
+    def test_daily_summary_phase4_keys(self) -> None:
+        town = Town()
+        town.day = 3
+        town.state["economy"] = {
+            "population": 120,
+            "employed": 90,
+            "treasury": 1100.0,
+            "shops_open": 6,
+            "tax_income": 42.5,
+            "utility_income": 12.0,
+        }
+        town.state["residents"] = {
+            "count": 120,
+            "employed": 90,
+            "avg_wallet_cents": 2000,
+            "bills_paid_cents": 750,
+            "in_arrears": 4,
+        }
+        town.state["businesses"] = {
+            "open_count": 6,
+            "shops": {},
+            "bills_paid_cents": 250,
+        }
+        line = daily_summary(town)
+        self.assertIn("tax_income=42.5", line)
+        self.assertIn("bills_paid=$10.00", line)
+        self.assertIn("arrears=4", line)
+        report = final_report(town, [])
+        self.assertIn("phase4: tax_income=42.5 bills_paid=$10.00 arrears=4", report)
 
     def test_format_dollars(self) -> None:
         self.assertEqual(format_dollars(0), "$0.00")
@@ -419,6 +452,9 @@ class CliTests(unittest.TestCase):
                 "max_zero_streak": 0,
                 "avg_wallet_cents": 2500,
                 "treasury": 100.0,
+                "tax_income": 12.5,
+                "bills_paid_cents": 800,
+                "in_arrears": 2,
                 "pass": True,
             },
             {
@@ -427,6 +463,9 @@ class CliTests(unittest.TestCase):
                 "max_zero_streak": 5,
                 "avg_wallet_cents": 90000,
                 "treasury": 50.0,
+                "tax_income": None,
+                "bills_paid_cents": None,
+                "in_arrears": None,
                 "pass": False,
             },
         ]
@@ -434,6 +473,11 @@ class CliTests(unittest.TestCase):
         self.assertIn("1 of 2 seeds pass", table)
         self.assertIn("PASS", table)
         self.assertIn("FAIL", table)
+        self.assertIn("tax_inc", table)
+        self.assertIn("bills", table)
+        self.assertIn("arrears", table)
+        self.assertIn("$8.00", table)
+        self.assertIn("n/a", table)
 
 
     def test_seeds_do_not_write_log_files(self) -> None:
@@ -525,7 +569,11 @@ class ExportTests(unittest.TestCase):
                     "sold_yesterday": 1,
                     "staff": [1, 2],
                 }
-            }
+            },
+            "taxes_paid_cents": 200,
+            "bills_paid_cents": 100,
+            "arrears_cents": 0,
+            "open_count": 1,
         }
         town.state["residents"] = {
             "people": [{"id": 1, "name": "Ada", "wallet_cents": 9}],
@@ -534,13 +582,17 @@ class ExportTests(unittest.TestCase):
             "avg_wallet_cents": 2500,
             "avg_mood": 0.7,
             "mood_bands": {"happy": 10, "ok": 5},
+            "taxes_paid_cents": 100,
+            "bills_paid_cents": 750,
+            "arrears_cents": 50,
+            "in_arrears": 3,
         }
         snap = snapshot_day(town)
         self.assertEqual(snap["day"], 2)
         self.assertEqual(snap["weather"]["condition"], "sun")
         self.assertEqual(snap["economy"]["treasury"], 100.0)
         self.assertEqual(
-            snap["businesses"]["fold-post"],
+            snap["businesses"]["shops"]["fold-post"],
             {
                 "open": True,
                 "price_cents": 500,
@@ -549,7 +601,10 @@ class ExportTests(unittest.TestCase):
                 "sold_yesterday": 1,
             },
         )
-        self.assertNotIn("staff", snap["businesses"]["fold-post"])
+        self.assertNotIn("staff", snap["businesses"]["shops"]["fold-post"])
+        self.assertEqual(snap["businesses"].get("taxes_paid_cents"), 200)
+        self.assertEqual(snap["businesses"].get("bills_paid_cents"), 100)
+        self.assertEqual(snap["businesses"].get("arrears_cents"), 0)
         self.assertEqual(
             snap["residents"],
             {
@@ -558,6 +613,10 @@ class ExportTests(unittest.TestCase):
                 "avg_wallet_cents": 2500,
                 "avg_mood": 0.7,
                 "mood_bands": {"happy": 10, "ok": 5},
+                "taxes_paid_cents": 100,
+                "bills_paid_cents": 750,
+                "arrears_cents": 50,
+                "in_arrears": 3,
             },
         )
         self.assertNotIn("people", snap["residents"])

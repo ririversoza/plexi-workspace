@@ -117,6 +117,22 @@ def _esc(text: Any) -> str:
     return html.escape(str(text), quote=True)
 
 
+def _shops_map(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve the per-shop map from a daily entry (Phase 4 nests under ``shops``)."""
+    businesses = entry.get("businesses") or {}
+    if not isinstance(businesses, dict):
+        return {}
+    nested = businesses.get("shops")
+    if isinstance(nested, dict):
+        return nested
+    # Pre-Phase-4 exports stored shops at the businesses root.
+    return {
+        sid: shop
+        for sid, shop in businesses.items()
+        if isinstance(shop, dict) and ("balance_cents" in shop or "open" in shop)
+    }
+
+
 def _series_shop_balances(
     daily: Sequence[Dict[str, Any]],
 ) -> Dict[str, List[Optional[float]]]:
@@ -129,9 +145,7 @@ def _series_shop_balances(
     order: List[str] = []
     seen: set = set()
     for entry in daily:
-        shops = entry.get("businesses") or {}
-        if not isinstance(shops, dict):
-            continue
+        shops = _shops_map(entry if isinstance(entry, dict) else {})
         for shop_id in shops:
             sid = str(shop_id)
             if sid not in seen:
@@ -140,9 +154,9 @@ def _series_shop_balances(
 
     series: Dict[str, List[Optional[float]]] = {sid: [None] * n for sid in order}
     for index, entry in enumerate(daily):
-        shops = entry.get("businesses") or {}
-        if not isinstance(shops, dict):
+        if not isinstance(entry, dict):
             continue
+        shops = _shops_map(entry)
         for shop_id, shop in shops.items():
             if not isinstance(shop, dict):
                 continue
@@ -189,6 +203,88 @@ def _weather_conditions(daily: Sequence[Dict[str, Any]]) -> List[str]:
         else:
             out.append(str(cond))
     return out
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_cents_dollars(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return int(value) / 100.0
+    except (TypeError, ValueError):
+        return None
+
+
+def _series_taxes_and_bills(
+    daily: Sequence[Dict[str, Any]],
+) -> Dict[str, List[Optional[float]]]:
+    """Tax income, utility income, and bills paid ($) over days; gaps when missing."""
+    tax: List[Optional[float]] = []
+    utility: List[Optional[float]] = []
+    bills: List[Optional[float]] = []
+    for entry in daily:
+        economy = entry.get("economy") if isinstance(entry, dict) else None
+        if isinstance(economy, dict) and "tax_income" in economy:
+            tax.append(_optional_float(economy.get("tax_income")))
+        else:
+            tax.append(None)
+        if isinstance(economy, dict) and "utility_income" in economy:
+            utility.append(_optional_float(economy.get("utility_income")))
+        else:
+            utility.append(None)
+
+        total = 0.0
+        found = False
+        for name in ("residents", "businesses"):
+            state = entry.get(name) if isinstance(entry, dict) else None
+            if isinstance(state, dict) and "bills_paid_cents" in state:
+                found = True
+                dollars = _optional_cents_dollars(state.get("bills_paid_cents"))
+                if dollars is not None:
+                    total += dollars
+        bills.append(total if found else None)
+    return {
+        "tax income ($)": tax,
+        "utility income ($)": utility,
+        "bills paid ($)": bills,
+    }
+
+
+def _series_arrears(
+    daily: Sequence[Dict[str, Any]],
+) -> Dict[str, List[Optional[float]]]:
+    """Residents in arrears (count) and arrears balances ($); gaps when missing."""
+    in_arrears: List[Optional[float]] = []
+    resident_arrears: List[Optional[float]] = []
+    shop_arrears: List[Optional[float]] = []
+    for entry in daily:
+        residents = entry.get("residents") if isinstance(entry, dict) else None
+        businesses = entry.get("businesses") if isinstance(entry, dict) else None
+        if isinstance(residents, dict) and "in_arrears" in residents:
+            in_arrears.append(_optional_float(residents.get("in_arrears")))
+        else:
+            in_arrears.append(None)
+        if isinstance(residents, dict) and "arrears_cents" in residents:
+            resident_arrears.append(_optional_cents_dollars(residents.get("arrears_cents")))
+        else:
+            resident_arrears.append(None)
+        if isinstance(businesses, dict) and "arrears_cents" in businesses:
+            shop_arrears.append(_optional_cents_dollars(businesses.get("arrears_cents")))
+        else:
+            shop_arrears.append(None)
+    return {
+        "residents in arrears": in_arrears,
+        "resident arrears ($)": resident_arrears,
+        "shop arrears ($)": shop_arrears,
+    }
 
 
 def _polyline_segments(
@@ -337,8 +433,10 @@ def _leaderboard_rows(daily: Sequence[Dict[str, Any]]) -> List[Tuple[str, int, i
     if not daily:
         return []
     last = daily[-1]
-    shops = last.get("businesses") or {}
-    if not isinstance(shops, dict):
+    if not isinstance(last, dict):
+        return []
+    shops = _shops_map(last)
+    if not shops:
         return []
     rows: List[Tuple[str, int, int, bool]] = []
     for shop_id, shop in shops.items():
@@ -557,6 +655,8 @@ def render_html(timeline: Dict[str, Any]) -> str:
     wallet_series = {"avg wallet ($)": _series_avg_wallet(daily)}
     congestion_series = {"congestion": _series_congestion(daily)}
     weather = _weather_conditions(daily)
+    taxes_bills_series = _series_taxes_and_bills(daily)
+    arrears_series = _series_arrears(daily)
 
     shop_chart = _line_chart_svg(
         shop_series,
@@ -576,6 +676,18 @@ def render_html(timeline: Dict[str, Any]) -> str:
         title="Traffic congestion",
         y_label="congestion (0-1)",
         colours=("#3d5a80",),
+    )
+    taxes_chart = _line_chart_svg(
+        taxes_bills_series,
+        title="Taxes and bills",
+        y_label="dollars",
+        colours=("#5c6b3a", "#3d5a80", "#c45c26"),
+    )
+    arrears_chart = _line_chart_svg(
+        arrears_series,
+        title="Arrears",
+        y_label="count / dollars",
+        colours=("#a33b2b", "#8b5e34", "#7a3e5c"),
     )
     board = _leaderboard_html(daily)
 
@@ -599,12 +711,15 @@ def render_html(timeline: Dict[str, Any]) -> str:
 <main>
   {shop_chart}
   {wallet_chart}
+  {taxes_chart}
+  {arrears_chart}
   {weather_chart}
   {traffic_chart}
   {board}
 </main>
 <footer>
   Static snapshot. Inline CSS and SVG only — no scripts, no external assets.
+  Missing Phase 4 tax/bill/arrears keys plot as gaps.
 </footer>
 </body>
 </html>
