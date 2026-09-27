@@ -49,6 +49,10 @@ class TrafficTests(unittest.TestCase):
                         self.assertIsInstance(row["commuters"], int)
                         self.assertIsInstance(row["accidents_today"], int)
                         self.assertIsInstance(row["congestion"], float)
+                        self.assertIsInstance(row["bus_running"], bool)
+                        self.assertIsInstance(row["bus_riders"], int)
+                        self.assertTrue(0 <= row["bus_riders"] <= 40)
+                        self.assertLessEqual(row["commuters"] + row["bus_riders"], max(0, employed))
                         self.assertTrue(0 <= row["commuters"] <= max(0, employed))
                         self.assertTrue(0.0 <= row["congestion"] <= 1.0)
                         self.assertTrue(0 <= row["accidents_today"] <= row["commuters"])
@@ -80,7 +84,7 @@ class TrafficTests(unittest.TestCase):
         system.tick(town)
         self.assertEqual(town.state["traffic"], {
             "commuters": expected_trips, "congestion": expected_trips / 500,
-            "accidents_today": expected_accidents,
+            "accidents_today": expected_accidents, "bus_running": False, "bus_riders": 0,
         })
         self.assertEqual(town.rng.getstate(), expected_rng.getstate())
         for key, value in before.items():
@@ -100,7 +104,7 @@ class TrafficTests(unittest.TestCase):
         town.state["residents"]["purchases"] = {}
         system.tick(town)
         self.assertEqual(town.state["traffic"], {
-            "commuters": 0, "congestion": 0.0, "accidents_today": 0,
+            "commuters": 0, "congestion": 0.0, "accidents_today": 0, "bus_running": False, "bus_riders": 0,
         })
 
     def test_residents_determinism_and_bounds(self):
@@ -113,7 +117,7 @@ class TrafficTests(unittest.TestCase):
             self.assertEqual(history, repeated)
             self.assertEqual(first.events, second.events)
             for row in history:
-                self.assertTrue(710 <= row["commuters"] <= 960)
+                self.assertTrue(710 <= row["commuters"] + row["bus_riders"] <= 960)
                 self.assertTrue(0 <= row["congestion"] <= 1)
                 self.assertTrue(0 <= row["accidents_today"] <= row["commuters"])
 
@@ -143,9 +147,11 @@ class TrafficTests(unittest.TestCase):
                         town.state.pop("residents", None)
                     else:
                         town.state["residents"] = residents
-                    before = town.rng.draws
-                    system.tick(town)
-                    self.assertEqual(town.rng.draws - before, 5)
+                    for previous_congestion in (0.0, 0.6, 0.61, 1.0):
+                        town.state["traffic"]["congestion"] = previous_congestion
+                        before = town.rng.draws
+                        system.tick(town)
+                        self.assertEqual(town.rng.draws - before, 5)
 
     def test_accident_rounding_threshold_and_zero_traffic(self):
         class FixedRandom:
@@ -176,7 +182,7 @@ class TrafficTests(unittest.TestCase):
         self.assertEqual(set(town.state), {"traffic"})
         self.assertEqual(len(town.events), 90)
         self.assertTrue(all(row == dict(commuters=0, congestion=0.0,
-                                       accidents_today=0) for row in history))
+                                       accidents_today=0, bus_running=False, bus_riders=0) for row in history))
 
     def test_missing_keys_and_unknown_weather_defaults(self):
         for state in ({"economy": {}, "weather": {}}, {"weather": {"condition": "snow"}}):
@@ -210,9 +216,75 @@ class TrafficTests(unittest.TestCase):
         town.state["economy"]["employed"] = 0
         town.day = 2
         system.tick(town)
-        self.assertEqual(town.state["traffic"], dict(commuters=0, congestion=0.0, accidents_today=0))
+        self.assertEqual(town.state["traffic"], dict(commuters=0, congestion=0.0, accidents_today=0, bus_running=True, bus_riders=0))
         self.assertEqual(town.events[-1], dict(day=2, system="traffic", kind="traffic_daily",
-                                             commuters=0, congestion=0.0, accidents_today=0))
+                                             commuters=0, congestion=0.0, accidents_today=0, bus_running=True, bus_riders=0))
+
+    def test_bus_threshold_share_cap_and_rng_alignment(self):
+        for employed, expected_riders in ((0, 0), (1, 0), (100, 20), (1000, 40)):
+            results = []
+            for yesterday in (0.6, 0.600001):
+                town = FakeTown({"economy": {"employed": employed}})
+                System().setup(town)
+                town.state["traffic"]["congestion"] = yesterday
+                System().tick(town)
+                results.append(town)
+            without, with_bus = results
+            car = without.state["traffic"]
+            bus = with_bus.state["traffic"]
+            self.assertFalse(car["bus_running"])
+            self.assertTrue(bus["bus_running"])
+            self.assertEqual(bus["bus_riders"], expected_riders)
+            self.assertEqual(bus["commuters"] + bus["bus_riders"], car["commuters"])
+            self.assertLessEqual(bus["congestion"], car["congestion"])
+            self.assertEqual(without.rng.getstate(), with_bus.rng.getstate())
+            if employed == 100:
+                self.assertLess(bus["congestion"], car["congestion"])
+
+    def test_bus_uses_yesterday_and_switches_off_after_relief(self):
+        town = FakeTown({"economy": {"employed": 500}})
+        system = System()
+        system.setup(town)
+        system.tick(town)
+        self.assertFalse(town.state["traffic"]["bus_running"])
+        self.assertGreater(town.state["traffic"]["congestion"], 0.6)
+        town.state["economy"]["employed"] = 100
+        system.tick(town)
+        self.assertTrue(town.state["traffic"]["bus_running"])
+        self.assertLess(town.state["traffic"]["congestion"], 0.6)
+        system.tick(town)
+        self.assertFalse(town.state["traffic"]["bus_running"])
+        self.assertEqual(town.state["traffic"]["bus_riders"], 0)
+        self.assertEqual(town.events[-1]["bus_riders"], 0)
+
+    def test_bus_reduces_accident_exposure(self):
+        class FixedRandom:
+            def uniform(self, low, high):
+                return 0.8
+
+            def random(self):
+                return 0.06
+
+        accidents = []
+        for yesterday in (0.0, 0.7):
+            town = FakeTown({"economy": {"employed": 100}})
+            town.rng = FixedRandom()
+            System().setup(town)
+            town.state["traffic"]["congestion"] = yesterday
+            System().tick(town)
+            accidents.append(town.state["traffic"]["accidents_today"])
+        # Four groups: 20 * .0036 > .06 without bus, 15 * .0032 < .06 with it.
+        self.assertEqual(accidents, [4, 0])
+
+    def test_bus_also_serves_resident_shopping_trips(self):
+        town = FakeTown({"residents": {"purchases": {"shop": 64}}})
+        system = System()
+        system.setup(town)
+        town.state["traffic"]["congestion"] = 0.7
+        system.tick(town)
+        self.assertEqual(town.state["traffic"]["bus_riders"], 4)
+        self.assertEqual(town.state["traffic"]["commuters"], 12)
+        self.assertEqual(town.state["residents"]["purchases"], {"shop": 64})
 
     def test_adverse_weather_reduces_capacity(self):
         results = []
