@@ -96,9 +96,11 @@ system: it never ticks, emits or touches `town.rng`.
   - `residents.avg_mood` / `mood_bands` (Kiwi) add `  mood: avg 58/100 | happy 56 | ok 45 | unhappy 19`
     under the top wallets (`n/a` for whichever half is missing).
   - A shop's `price_cents` vs its base price (Nori's weekly pricing) adds ` ↑` or ` ↓` after
-    the price, and nothing when they're equal. The base is the shop's `base_price_cents` if
-    state has one, otherwise the catalog price copied from `nori/shops/README.md`
-    (`BASE_PRICE_CENTS`). Shops not in that table get no arrow.
+    the price, and nothing when they're equal. Arrows appear only when the base is actually
+    known: the shop's own `base_price_cents` if state has one, otherwise the price the
+    viewer's run saw on day 1 (weekly pricing first moves on day 7). `render()` on a bare
+    state, with no `base_prices`, draws no arrows. Nothing is guessed from a copied table.
+  - `mood_bands` keys are normalised to strings once, so odd keys (`{1: 2}`) still render.
   - `economy.project` / `projects_completed` (Sora's public works) add a ticker line like
     `town hall: building market square (70%) | 2 completed`. `project` is a dict with
     `"name"` and `"progress"` (0..1); `None` shows `no project` (between projects, or all
@@ -128,8 +130,15 @@ Draws each shop's `balance_cents` over the run as a 60-column by 12-row ASCII ch
 
 - **x:** days 1..90 spread over 60 columns (`(day - 1) * 60 // 90`). A column shows the
   balance on the last day that falls in it.
-- **y:** $0 on the bottom row up to the shop's max balance on the top row, rounded to the
-  nearest row. Labels are the max, the middle and $0.
+- **y:** from `min(0, lowest balance)` on the bottom row to `max(0, highest balance)` on
+  the top row, rounded to the nearest row. So $0 is the bottom for normal shops, and a
+  negative balance extends the axis downward instead of flattening onto the $0 row. Labels
+  are the top, the middle and the bottom. The label column is at least 12 wide and grows to
+  fit the longest label, and the grid, axis, day labels and marker rows all share that
+  width, so huge balances can't misalign them.
+- **Big or odd numbers:** amounts are formatted and scaled in exact integer arithmetic
+  (`Fraction`), so a balance like `10**400` can't raise `OverflowError`. NaN and infinite
+  balances count as missing.
 - **Marker rows** under the axis: `S` where a day in that column was *storm-closed*
   (`weather.condition == "storm"` and the shop is closed), `0` where the balance was
   exactly $0.
