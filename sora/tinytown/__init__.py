@@ -1,5 +1,7 @@
 """Tiny Town economy: population, jobs, shops and the town treasury."""
 
+import math
+
 START_POPULATION = 500
 START_EMPLOYMENT_RATE = 0.90
 START_TREASURY = 1000.0
@@ -13,11 +15,39 @@ UPKEEP_PER_RESIDENT = 1.0
 
 DEFAULT_CONDITION = "sun"
 
+# Public works: funded one at a time, in this order, only from money above the reserve.
+PROJECT_RESERVE = 1000.0
+PROJECT_INSTALMENT = 20.0
+PROJECTS = (("park", 200.0), ("bike lane", 300.0), ("market square", 400.0))
+
 
 def _read(town, system, key):
     """An int from another system's state, or None if it isn't there."""
     value = (town.state.get(system) or {}).get(key)
     return value if isinstance(value, int) else None
+
+
+def _public_works(town, prev, treasury):
+    """Pay today's instalment. Returns (treasury, project, projects_completed)."""
+    project = prev.get("project")
+    completed = list(prev.get("projects_completed") or [])
+    if project is None:
+        remaining = [p for p in PROJECTS if p[0] not in completed]
+        if not remaining or treasury <= PROJECT_RESERVE:
+            return treasury, None, completed
+        name, cost = remaining[0]
+        project = {"name": name, "cost": cost, "paid": 0.0, "progress": 0.0}
+        town.emit("project_started", name=name, cost=cost)
+
+    # Never below the reserve, so never an overdraft.
+    payment = max(0.0, min(PROJECT_INSTALMENT, project["cost"] - project["paid"], treasury - PROJECT_RESERVE))
+    paid = round(project["paid"] + payment, 2)
+    treasury = round(treasury - payment, 2)
+    if paid >= project["cost"]:
+        town.emit("project_completed", name=project["name"], cost=project["cost"])
+        return treasury, None, completed + [project["name"]]
+    progress = math.floor(paid / project["cost"] * 10_000) / 10_000  # floor keeps it < 1 until fully paid
+    return treasury, {**project, "paid": paid, "progress": progress}, completed
 
 
 class System:
@@ -29,6 +59,8 @@ class System:
             "employed": round(START_POPULATION * START_EMPLOYMENT_RATE),
             "treasury": START_TREASURY,
             "shops_open": SHOPS,
+            "project": None,
+            "projects_completed": [],
         }
 
     def tick(self, town):
@@ -59,9 +91,13 @@ class System:
         if spent < upkeep:
             town.emit("budget_shortfall", needed=upkeep, spent=spent)
 
+        treasury, project, completed = _public_works(town, prev, round(available - spent, 2))
+
         town.state[self.name] = {
             "population": population,
             "employed": employed,
-            "treasury": round(available - spent, 2),
+            "treasury": treasury,
             "shops_open": shops_open,
+            "project": project,
+            "projects_completed": completed,
         }
