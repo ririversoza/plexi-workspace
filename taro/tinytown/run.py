@@ -2,12 +2,15 @@
 
 Works with zero systems installed: still prints 90 daily lines and a final report.
 Phase 2 summaries cover residents, wallets, shops, and a shop leaderboard.
-Phase 3 adds a small argparse CLI and a multi-seed robustness table.
+Phase 3 adds a small argparse CLI, a multi-seed robustness table,
+and optional ``--export PATH`` for a compact JSON timeline.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
+import json
 import importlib
 import sys
 from pathlib import Path
@@ -38,7 +41,9 @@ __all__ = [
     "MAX_ZERO_STREAK",
     "MIN_SHOPS_OPEN",
     "build_parser",
+    "build_timeline",
     "cli",
+    "count_events_by_kind",
     "daily_summary",
     "evaluate_targets",
     "final_report",
@@ -54,6 +59,9 @@ __all__ = [
     "sales_today",
     "shop_leaderboard",
     "shops_with_balance",
+    "snapshot_day",
+    "validate_export_path",
+    "write_timeline",
 ]
 
 
@@ -61,7 +69,8 @@ def load_systems(*, disable_log_files: bool = False) -> List[Any]:
     """Import every catalogued system package; skip anything not installed.
 
     When ``disable_log_files`` is true, the log system is constructed with
-    ``csv_path=None`` so it never writes ``events.csv`` (used by ``--seeds``).
+    ``csv_path=None`` so it never writes ``events.csv`` (used by ``--seeds``
+    and ``--export``).
     """
     loaded: List[Any] = []
     for name, module_path in SYSTEM_MODULES.items():
@@ -410,23 +419,136 @@ def run_seeds_report(
     return format_seeds_table(slim), slim
 
 
+_SHOP_EXPORT_FIELDS = (
+    "open",
+    "price_cents",
+    "available",
+    "balance_cents",
+    "sold_yesterday",
+)
+
+
+def snapshot_day(town: Town) -> Dict[str, Any]:
+    """Compact end-of-day snapshot for the timeline export (no RNG draws)."""
+    entry: Dict[str, Any] = {"day": town.day}
+
+    for key in ("weather", "economy", "traffic", "emergency"):
+        state = town.state.get(key)
+        if isinstance(state, dict):
+            entry[key] = copy.deepcopy(state)
+
+    businesses = town.state.get("businesses")
+    if isinstance(businesses, dict):
+        shops_out: Dict[str, Dict[str, Any]] = {}
+        shops = businesses.get("shops") or {}
+        if isinstance(shops, dict):
+            for shop_id, shop in shops.items():
+                if not isinstance(shop, dict):
+                    continue
+                shops_out[str(shop_id)] = {
+                    field: shop.get(field) for field in _SHOP_EXPORT_FIELDS
+                }
+        entry["businesses"] = shops_out
+
+    residents = town.state.get("residents")
+    if isinstance(residents, dict):
+        people = {
+            "count": residents.get("count"),
+            "employed": residents.get("employed"),
+            "avg_wallet_cents": residents.get("avg_wallet_cents"),
+        }
+        if "avg_mood" in residents:
+            people["avg_mood"] = residents.get("avg_mood")
+        if "mood_bands" in residents:
+            people["mood_bands"] = residents.get("mood_bands")
+        entry["residents"] = people
+
+    return entry
+
+
+def count_events_by_kind(town: Town) -> Dict[str, int]:
+    """Count emitted events by ``system.kind`` (compact; not the full event list)."""
+    counts: Dict[str, int] = {}
+    for event in town.events:
+        system = event.get("system")
+        system_key = "" if system is None else str(system)
+        kind = str(event.get("kind", ""))
+        key = f"{system_key}.{kind}"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+# Underscore aliases so dashboard can import without copying the schema helpers.
+_load_systems = load_systems
+_snapshot_day = snapshot_day
+_count_events_by_kind = count_events_by_kind
+
+
+def validate_export_path(path: str, *, flag: str = "--export") -> None:
+    """Reject empty paths, existing directories, and missing parents up front.
+
+    Raises ``ValueError`` with a clear message on failure. Parent ``.`` (cwd)
+    and an empty parent (bare filename) are allowed. ``flag`` customises the
+    message prefix so callers like the dashboard can reuse this for ``--out``.
+    """
+    if path is None or not str(path).strip():
+        raise ValueError(f"{flag} path must not be empty")
+    target = Path(path)
+    if target.exists() and target.is_dir():
+        raise ValueError(f"{flag} path is an existing directory: {target}")
+    parent = target.parent
+    if str(parent) in ("", "."):
+        return
+    if not parent.exists():
+        raise ValueError(f"{flag} parent directory does not exist: {parent}")
+    if not parent.is_dir():
+        raise ValueError(f"{flag} parent is not a directory: {parent}")
+
+
+def build_timeline(
+    town: Town,
+    systems: List[Any],
+    daily: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Assemble the JSON timeline document."""
+    return {
+        "seed": town.seed,
+        "days": town.day,
+        "systems": [system.name for system in systems],
+        "daily": daily,
+        "events_by_kind": count_events_by_kind(town),
+    }
+
+
+def write_timeline(path: str, timeline: Dict[str, Any]) -> None:
+    """Write ``timeline`` JSON to the exact ``path`` (parents must exist)."""
+    target = Path(path)
+    target.write_text(json.dumps(timeline, indent=2, sort_keys=False) + "\n")
+
+
 def main(
     days: int = DEFAULT_DAYS,
     seed: int = DEFAULT_SEED,
     *,
     quiet: bool = False,
+    export_path: Optional[str] = None,
 ) -> Town:
-    """Run the town. Default (quiet=False) prints every daily line + final report."""
-    systems = load_systems()
+    """Run the town. Default stdout unchanged; ``export_path`` adds a JSON file."""
+    systems = load_systems(disable_log_files=export_path is not None)
     units_sold: Dict[str, int] = {}
+    daily: List[Dict[str, Any]] = []
 
     def on_day(town: Town) -> None:
         if not quiet:
             print(daily_summary(town))
         _accumulate_sales(town, units_sold)
+        if export_path is not None:
+            daily.append(snapshot_day(town))
 
     town = run_town(systems, days=days, seed=seed, on_day=on_day)
     print(final_report(town, systems, units_sold=units_sold or None))
+    if export_path is not None:
+        write_timeline(export_path, build_timeline(town, systems, daily))
     return town
 
 
@@ -483,6 +605,15 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="A-B",
         help="run each seed quietly and print a robustness table",
     )
+    parser.add_argument(
+        "--export",
+        metavar="PATH",
+        default=None,
+        help=(
+            "write a compact JSON timeline to PATH (disables event-log CSV; "
+            "daily lines and final report still print; incompatible with --seeds)"
+        ),
+    )
     return parser
 
 
@@ -493,12 +624,30 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def cli(argv: Optional[Sequence[str]] = None) -> Any:
     """CLI entry: default argv preserves today's plain-run stdout."""
-    args = parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.seeds is not None and args.export is not None:
+        print(
+            "error: --seeds cannot be combined with --export",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    if args.export is not None:
+        try:
+            validate_export_path(args.export)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(2) from exc
     if args.seeds is not None:
         table, rows = run_seeds_report(args.seeds, days=args.days)
         print(table)
         return rows
-    return main(days=args.days, seed=args.seed, quiet=args.quiet)
+    return main(
+        days=args.days,
+        seed=args.seed,
+        quiet=args.quiet,
+        export_path=args.export,
+    )
 
 
 if __name__ == "__main__":
