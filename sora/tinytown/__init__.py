@@ -14,6 +14,12 @@ UPKEEP_PER_RESIDENT = 1.0
 DEFAULT_CONDITION = "sun"
 
 
+def _read(town, system, key):
+    """An int from another system's state, or None if it isn't there."""
+    value = (town.state.get(system) or {}).get(key)
+    return value if isinstance(value, int) else None
+
+
 class System:
     name = "economy"
 
@@ -30,11 +36,21 @@ class System:
         weather = town.state.get("weather") or {}
         is_storm = weather.get("condition", DEFAULT_CONDITION) == "storm"
 
-        population = max(0, prev["population"] + town.rng.randint(*DAILY_ARRIVALS))
-        employed = min(population, round(population * town.rng.uniform(*EMPLOYMENT_RATE)))
-        shops_open = 0 if is_storm else SHOPS
-        if is_storm:
-            town.emit("shops_closed", reason="storm")
+        population = _read(town, "residents", "count")
+        if population is None:
+            population = prev["population"] + town.rng.randint(*DAILY_ARRIVALS)
+        population = max(0, population)
+
+        employed = _read(town, "residents", "employed")
+        if employed is None:
+            employed = round(population * town.rng.uniform(*EMPLOYMENT_RATE))
+        employed = max(0, min(population, employed))
+
+        shops_open = _read(town, "businesses", "open_count")
+        if shops_open is None:
+            shops_open = 0 if is_storm else SHOPS
+            if is_storm:
+                town.emit("shops_closed", reason="storm")
 
         income = employed * TAX_PER_WORKER + shops_open * TAX_PER_SHOP
         available = prev["treasury"] + income
