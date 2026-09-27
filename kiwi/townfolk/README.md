@@ -9,8 +9,9 @@ Assumptions and numbers:
   `__init__.py` give 120 unique full names, shuffled once. Each person draws
   one of four streets uniformly (streets may repeat) and an initial wallet
   uniformly from 2,000–10,000 cents inclusive. These are starting savings.
-- Jobs are independently shuffled: exactly two staff for each of the six
-  contract shop IDs, 90 out-of-town workers (75% of all residents), and 18
+- Jobs are independently shuffled: two staff each for `bench-and-bell` and
+  `spoke-and-spanner`, one for each of the other four contract shop IDs,
+  94 out-of-town workers (78.3% of all residents), and 18
   unemployed. Jobs and addresses stay fixed; 102 people are employed.
 - Day 1 is Monday. Out-of-town workers receive 3,000 cents per weekday,
   including bad-weather days, from employers outside the modeled town.
@@ -21,9 +22,15 @@ Assumptions and numbers:
   priority for scarce stock. Visit probabilities: sun 65%, cloud 55%, rain
   35%, snow 20%, storm 0%. Missing/unknown weather defaults to sun. Storms
   prevent purchases even if a shop incorrectly advertises itself as open.
-- A visitor uniformly selects one open, stocked contract shop and attempts
-  to buy exactly one unit. If unaffordable, they leave without trying another
-  shop. No credit, debt, multi-unit purchases, or other wallet expenses.
+- After wages, a visitor with more than 10,000 cents ($100) may buy one
+  unit at each of up to two different shops; everyone else may buy one unit
+  at one shop. This daily limit is fixed before the first purchase. Each
+  selection is uniform among currently open, stocked, affordable contract
+  shops not already visited today; affordability is checked again after the
+  first purchase. If none qualify, shopping stops. A single weather-dependent
+  visit draw gates the whole outing. No credit, debt, repeated-shop visits,
+  or other wallet expenses. The extra demand and revised eight-person staffing
+  implement the Phase 2 balance amendment.
 - Only strictly positive integer prices are accepted; stock and wage inputs
   must be nonnegative integers (booleans are not money). Missing/invalid
   values imply zero stock/wages or an unusable price. Missing businesses or

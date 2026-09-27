@@ -5,7 +5,7 @@ import random
 import unittest
 from collections import Counter
 
-from kiwi.townfolk import SHOP_IDS, System
+from kiwi.townfolk import SHOP_IDS, STAFF_COUNTS, System
 
 
 class Town:
@@ -35,7 +35,7 @@ class ResidentsTests(unittest.TestCase):
         self.assertEqual(len({p["name"] for p in people}), 120)
         self.assertEqual([p["id"] for p in people], list(range(1, 121)))
         self.assertEqual(Counter(p["job"] for p in people),
-                         Counter({**dict.fromkeys(SHOP_IDS, 2), "out-of-town": 90, None: 18}))
+                         Counter({**STAFF_COUNTS, "out-of-town": 94, None: 18}))
         for person in people:
             self.assertEqual(set(person), {"id", "name", "street", "job", "wallet_cents"})
             self.assertTrue(2000 <= person["wallet_cents"] <= 10000)
@@ -92,15 +92,15 @@ class ResidentsTests(unittest.TestCase):
                 wage = inputs["businesses"]["wages_paid"].get(old["id"], 0)
                 if (day - 1) % 7 < 5 and old["job"] == "out-of-town":
                     wage += 3000
-                self.assertIn(old["wallet_cents"] + wage - new["wallet_cents"], (0, 500))
+                self.assertIn(old["wallet_cents"] + wage - new["wallet_cents"], (0, 500, 1000))
                 self.assertIs(type(new["wallet_cents"]), int)
                 self.assertGreaterEqual(new["wallet_cents"], 0)
-            self.assertLessEqual(sum(state["purchases"].values()), 120)
+            self.assertLessEqual(sum(state["purchases"].values()), 240)
             for shop, units in state["purchases"].items():
                 self.assertTrue(0 < units <= 5)
                 self.assertEqual(state["spent_cents"][shop], units * 500)
             total = sum(p["wallet_cents"] for p in state["people"])
-            wage_total = 740 + (270000 if (day - 1) % 7 < 5 else 0)
+            wage_total = 740 + (282000 if (day - 1) % 7 < 5 else 0)
             self.assertEqual(total, sum(p["wallet_cents"] for p in before) + wage_total - sum(state["spent_cents"].values()))
             self.assertEqual(state["avg_wallet_cents"], total // 120)
             self.assertEqual({k: v for k, v in town.state.items() if k != "residents"}, inputs)
@@ -146,6 +146,36 @@ class ResidentsTests(unittest.TestCase):
         self.assertEqual(totals, sorted(totals, reverse=True))
         self.assertGreater(totals[0], totals[-2])
         self.assertEqual(totals[-1], 0)
+
+    def test_healthy_threshold_distinct_shops_and_affordability(self):
+        class AlwaysVisits:
+            def shuffle(self, people):
+                pass
+
+            def random(self):
+                return 0.0
+
+            def choice(self, shops):
+                return shops[0]
+
+        for wallet, price, capacity, expected in (
+                (10000, 100, 120, {SHOP_IDS[0]: 1}),
+                (10001, 100, 120, {SHOP_IDS[0]: 1, SHOP_IDS[1]: 1}),
+                (10001, 6000, 120, {SHOP_IDS[0]: 1}),
+                (10001, 100, 0, {})):
+            with self.subTest(wallet=wallet, price=price, capacity=capacity):
+                town = Town()
+                self.system.setup(town)
+                town.rng = AlwaysVisits()
+                town.day = 6
+                people = town.state["residents"]["people"]
+                for person in people:
+                    person["wallet_cents"] = 0
+                people[0]["wallet_cents"] = wallet
+                town.state["businesses"] = businesses(capacity=capacity, price=price)
+                self.system.tick(town)
+                self.assertEqual(town.state["residents"]["purchases"], expected)
+                self.assertEqual(people[0]["wallet_cents"], wallet - price * sum(expected.values()))
 
     def test_missing_and_invalid_inputs_and_closed_shops(self):
         for value in (None, {}, [], -1, True, "bad"):
