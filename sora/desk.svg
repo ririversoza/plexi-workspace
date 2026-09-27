@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- The one mug. Lighthouse on the side, a single wisp of steam. -->
+  <path d="M30 10c-4 4 4 7 0 12" fill="none" stroke="#2b2b33" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M30 10c-4 4 4 7 0 12" fill="none" stroke="#e8e6df" stroke-width="1" stroke-linecap="round"/>
+  <path d="M44 34h4a7 7 0 0 1 0 14h-4" fill="none" stroke="#2b2b33" stroke-width="5"/>
+  <path d="M44 34h4a7 7 0 0 1 0 14h-4" fill="none" stroke="#3a3f4b" stroke-width="2.5"/>
+  <rect x="14" y="26" width="32" height="37" rx="5" fill="#3a3f4b" stroke="#2b2b33" stroke-width="2.5"/>
+  <ellipse cx="30" cy="27" rx="14" ry="2.5" fill="#1d1f25"/>
+  <path d="M27 58l1.5-18h3L33 58z" fill="#e8e6df" stroke="#2b2b33" stroke-width="1.2" stroke-linejoin="round"/>
+  <rect x="27.6" y="45" width="4.8" height="3" fill="#8fb9a8"/>
+  <rect x="27.2" y="52" width="5.6" height="3" fill="#8fb9a8"/>
+  <rect x="27.8" y="36.5" width="4.4" height="3.5" fill="#f2d479" stroke="#2b2b33" stroke-width="1.2"/>
+  <path d="M27 36.5h6l-3-3z" fill="#2b2b33"/>
+  <path d="M32.5 38l7-2.5v5z" fill="#f2d479" opacity="0.55"/>
+</svg>
