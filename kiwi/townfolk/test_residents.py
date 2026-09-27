@@ -13,6 +13,10 @@ class Town:
         self.day = 0
         self.rng = random.Random(seed)
         self.state = {}
+        self.events = []
+
+    def emit(self, kind, **data):
+        self.events.append({"day": self.day, "kind": kind, **data})
 
 
 def businesses(capacity=5, price=500):
@@ -37,7 +41,10 @@ class ResidentsTests(unittest.TestCase):
         self.assertEqual(Counter(p["job"] for p in people),
                          Counter({**STAFF_COUNTS, "out-of-town": 94, None: 18}))
         for person in people:
-            self.assertEqual(set(person), {"id", "name", "street", "job", "wallet_cents", "mood"})
+            self.assertEqual(set(person), {"id", "name", "street", "job", "wallet_cents", "mood",
+                                           "rent_arrears_cents", "utility_arrears_cents",
+                                           "arrears_cents", "taxes_paid_cents", "rent_paid_cents",
+                                           "utilities_paid_cents", "benefit_received_cents"})
             self.assertTrue(2000 <= person["wallet_cents"] <= 10000)
 
     def test_setup_does_not_read_other_systems(self):
@@ -66,6 +73,8 @@ class ResidentsTests(unittest.TestCase):
                 "people": [], "purchases": {}, "spent_cents": {},
                 "count": 0, "employed": 0, "avg_wallet_cents": 0,
                 "avg_mood": 0, "mood_bands": {"happy": 0, "ok": 0, "unhappy": 0},
+                "taxes_paid_cents": 0, "rent_paid_cents": 0, "bills_paid_cents": 0,
+                "arrears_cents": 0, "in_arrears": 0, "benefits_received_cents": 0,
             })
             self.assertEqual(self.town.rng.getstate(), rng)
             self.assertEqual(self.town.state["businesses"], inputs)
@@ -92,10 +101,12 @@ class ResidentsTests(unittest.TestCase):
             self.system.tick(self.town)
             self.assertEqual(self.town.state["residents"]["purchases"], {})
             self.assertEqual(self.town.state["residents"]["spent_cents"], {})
-        weekdays = sum((day - 1) % 7 < 5 for day in range(1, 91))
         for before, after in zip(initial, self.town.state["residents"]["people"]):
-            self.assertEqual(after["wallet_cents"], before["wallet_cents"] +
-                             (weekdays * 2000 if before["job"] == "out-of-town" else 0))
+            self.assertGreaterEqual(after["wallet_cents"], 0)
+            self.assertEqual(after["arrears_cents"],
+                             after["rent_arrears_cents"] + after["utility_arrears_cents"])
+            if before["job"] is None:
+                self.assertGreater(after["arrears_cents"], 0)
 
     def test_bounds_and_money_conservation_and_read_only_inputs(self):
         town = self.town
@@ -112,16 +123,18 @@ class ResidentsTests(unittest.TestCase):
                 wage = inputs["businesses"]["wages_paid"].get(old["id"], 0)
                 if (day - 1) % 7 < 5 and old["job"] == "out-of-town":
                     wage += 2000
-                self.assertIn(old["wallet_cents"] + wage - new["wallet_cents"], (0, 500, 1000))
                 self.assertIs(type(new["wallet_cents"]), int)
                 self.assertGreaterEqual(new["wallet_cents"], 0)
+                self.assertEqual(new["taxes_paid_cents"], wage // 10)
             self.assertLessEqual(sum(state["purchases"].values()), 240)
             for shop, units in state["purchases"].items():
                 self.assertTrue(0 < units <= 5)
                 self.assertEqual(state["spent_cents"][shop], units * 500)
             total = sum(p["wallet_cents"] for p in state["people"])
             wage_total = 740 + (188000 if (day - 1) % 7 < 5 else 0)
-            self.assertEqual(total, sum(p["wallet_cents"] for p in before) + wage_total - sum(state["spent_cents"].values()))
+            self.assertEqual(total, sum(p["wallet_cents"] for p in before) + wage_total
+                             - state["taxes_paid_cents"] - state["rent_paid_cents"]
+                             - state["bills_paid_cents"] - sum(state["spent_cents"].values()))
             self.assertEqual(state["avg_wallet_cents"], total // 120)
             self.assertEqual({k: v for k, v in town.state.items() if k != "residents"}, inputs)
             if inputs["weather"]["condition"] == "storm":
@@ -142,11 +155,11 @@ class ResidentsTests(unittest.TestCase):
         for person in self.town.state["residents"]["people"]:
             person["wallet_cents"] = 0
         self.town.state["businesses"] = businesses(capacity=120)
-        self.town.state["businesses"]["wages_paid"] = {1: 500, 2: 499}
+        self.town.state["businesses"]["wages_paid"] = {1: 1400, 2: 1387}
         self.system.tick(self.town)
         state = self.town.state["residents"]
         self.assertEqual(state["purchases"], {SHOP_IDS[0]: 1})
-        self.assertEqual(state["people"][0]["wallet_cents"], 0)
+        self.assertEqual(state["people"][0]["wallet_cents"], 10)
         self.assertEqual(state["people"][1]["wallet_cents"], 499)
         self.town.state.pop("businesses")
         self.system.tick(self.town)
@@ -179,10 +192,10 @@ class ResidentsTests(unittest.TestCase):
                 return shops[0]
 
         for wallet, price, capacity, expected in (
-                (10000, 100, 120, {SHOP_IDS[0]: 1}),
-                (10001, 100, 120, {SHOP_IDS[0]: 1, SHOP_IDS[1]: 1}),
-                (10001, 6000, 120, {SHOP_IDS[0]: 1}),
-                (10001, 100, 0, {})):
+                (10750, 100, 120, {SHOP_IDS[0]: 1}),
+                (10751, 100, 120, {SHOP_IDS[0]: 1, SHOP_IDS[1]: 1}),
+                (10751, 6000, 120, {SHOP_IDS[0]: 1}),
+                (10751, 100, 0, {})):
             with self.subTest(wallet=wallet, price=price, capacity=capacity):
                 town = Town()
                 self.system.setup(town)
@@ -195,7 +208,7 @@ class ResidentsTests(unittest.TestCase):
                 town.state["businesses"] = businesses(capacity=capacity, price=price)
                 self.system.tick(town)
                 self.assertEqual(town.state["residents"]["purchases"], expected)
-                self.assertEqual(people[0]["wallet_cents"], wallet - price * sum(expected.values()))
+                self.assertEqual(people[0]["wallet_cents"], wallet - 750 - price * sum(expected.values()))
 
     def test_missing_and_invalid_inputs_and_closed_shops(self):
         for value in (None, {}, [], -1, True, "bad"):
@@ -211,13 +224,82 @@ class ResidentsTests(unittest.TestCase):
                 for shop in self.town.state["businesses"]["shops"].values():
                     shop[field] = value
                 self.town.state["businesses"]["wages_paid"] = {1: -100, 2: True, 3: 1.5, 999: 100}
-                before = copy.deepcopy(self.town.state["residents"]["people"])
                 self.system.tick(self.town)
-                self.assertEqual(
-                    [{k: v for k, v in p.items() if k != "mood"}
-                     for p in self.town.state["residents"]["people"]],
-                    [{k: v for k, v in p.items() if k != "mood"} for p in before])
+                self.assertEqual(self.town.state["residents"]["taxes_paid_cents"], 0)
+                self.assertTrue(all(p["wallet_cents"] >= 0
+                                    for p in self.town.state["residents"]["people"]))
                 self.assertEqual(self.town.state["residents"]["purchases"], {})
+
+    def test_tax_withholding_bills_and_arrears_recovery(self):
+        state = self.town.state["residents"]
+        person = state["people"][0]
+        state["people"] = [person]
+        person.update(wallet_cents=0, job=None)
+        self.town.state["weather"] = {"condition": "sun"}
+
+        self.town.day = 6  # No out-of-town wages.
+        self.town.state["businesses"] = {"wages_paid": {person["id"]: 833}}
+        self.system.tick(self.town)
+        self.assertEqual((person["wallet_cents"], person["taxes_paid_cents"],
+                          person["rent_paid_cents"], person["utilities_paid_cents"]),
+                         (0, 83, 600, 150))
+        self.assertEqual((state["taxes_paid_cents"], state["rent_paid_cents"],
+                          state["bills_paid_cents"], state["arrears_cents"], state["in_arrears"]),
+                         (83, 600, 150, 0, 0))
+
+        self.town.day = 7
+        self.town.state.pop("businesses")
+        self.system.tick(self.town)
+        self.assertEqual((person["wallet_cents"], person["rent_arrears_cents"],
+                          person["utility_arrears_cents"]), (0, 600, 150))
+        self.assertEqual([event["kind"] for event in self.town.events],
+                         ["missed_rent", "missed_bill"])
+        self.assertEqual(state["in_arrears"], 1)
+        self.assertEqual(person["mood"], 15)  # Base 30, minus arrears penalty 15.
+
+        self.town.day = 8
+        self.town.state["businesses"] = {"wages_paid": {person["id"]: 2000}}
+        self.system.tick(self.town)
+        self.assertEqual((person["wallet_cents"], person["arrears_cents"]), (300, 0))
+        self.assertEqual((state["taxes_paid_cents"], state["rent_paid_cents"],
+                          state["bills_paid_cents"], state["in_arrears"]),
+                         (200, 1200, 300, 0))
+        self.assertEqual(len(self.town.events), 2)
+
+    def test_partial_old_arrears_first_and_no_overdraft(self):
+        state = self.town.state["residents"]
+        person = state["people"][0]
+        state["people"] = [person]
+        person.update(wallet_cents=0, job=None, rent_arrears_cents=600,
+                      utility_arrears_cents=150, arrears_cents=750)
+        self.town.day = 6
+        self.town.state["weather"] = {"condition": "storm"}
+        self.town.state["businesses"] = {"wages_paid": {person["id"]: 500}}
+        self.system.tick(self.town)
+        self.assertEqual((person["wallet_cents"], person["rent_arrears_cents"],
+                          person["utility_arrears_cents"]), (0, 750, 300))
+        self.assertEqual((state["taxes_paid_cents"], state["rent_paid_cents"],
+                          state["bills_paid_cents"], state["arrears_cents"]),
+                         (50, 450, 0, 1050))
+        self.assertEqual([event["kind"] for event in self.town.events],
+                         ["missed_rent", "missed_bill"])
+
+    def test_prior_day_unemployment_benefit_is_untaxed(self):
+        state = self.town.state["residents"]
+        unemployed = next(person for person in state["people"] if person["job"] is None)
+        employed = next(person for person in state["people"] if person["job"] is not None)
+        state["people"] = [unemployed, employed]
+        unemployed["wallet_cents"] = employed["wallet_cents"] = 0
+        self.town.day = 6
+        self.town.state["economy"] = {"benefit_per_head_cents": 750}
+        self.system.tick(self.town)
+        self.assertEqual((unemployed["benefit_received_cents"], unemployed["wallet_cents"],
+                          unemployed["arrears_cents"]), (750, 0, 0))
+        self.assertEqual((employed["benefit_received_cents"], employed["wallet_cents"],
+                          employed["arrears_cents"]), (0, 0, 750))
+        self.assertEqual((state["benefits_received_cents"], state["taxes_paid_cents"],
+                          state["bills_paid_cents"], state["in_arrears"]),
+                         (750, 0, 150, 1))
 
 
 if __name__ == "__main__":

@@ -23,14 +23,14 @@ Assumptions and numbers:
   priority for scarce stock. Visit probabilities: sun 65%, cloud 55%, rain
   35%, snow 20%, storm 0%. Missing/unknown weather defaults to sun. Storms
   prevent purchases even if a shop incorrectly advertises itself as open.
-- After wages, a visitor with more than 10,000 cents ($100) may buy one
+- After wages and fixed bills, a visitor with more than 10,000 cents ($100) may buy one
   unit at each of up to two different shops; everyone else may buy one unit
   at one shop. This daily limit is fixed before the first purchase. Each
   selection is uniform among currently open, stocked, affordable contract
   shops not already visited today; affordability is checked again after the
   first purchase. If none qualify, shopping stops. A single weather-dependent
-  visit draw gates the whole outing. No credit, debt, repeated-shop visits,
-  or other wallet expenses. The extra demand and revised eight-person staffing
+  visit draw gates the whole outing. Shopping uses no credit or repeated-shop visits.
+  The extra demand and revised eight-person staffing
   implement the Phase 2 balance amendment.
 - Only strictly positive integer prices are accepted; stock and wage inputs
   must be nonnegative integers (booleans are not money). Missing/invalid
@@ -42,7 +42,8 @@ Assumptions and numbers:
   dictionaries, replaced daily; absent shop entries mean zero.
 - Businesses settle these purchases next day under the shared contract.
   This system debits wallets immediately and does not book shop revenue,
-  change pending revenue, or emit events. The engine must tick once per day
+  change pending revenue. It emits missed-payment events for unpaid bills.
+  The engine must tick once per day
   after businesses; repeated ticks for the same day are not deduplicated.
 - `avg_wallet_cents` is the floor of total wallets divided by 120, calculated
   at setup and after shopping. All monetary values are integer cents.
@@ -50,8 +51,33 @@ Assumptions and numbers:
 Reads: `town.day`, `town.rng`, `weather.condition`, `businesses.shops`
 (`open`, `price_cents`, `available`), and `businesses.wages_paid`.
 Writes only `residents`: `people`, `purchases`, `spent_cents`, `count`,
-`employed`, `avg_wallet_cents`, `avg_mood`, and `mood_bands`. Each person also
-has an integer `mood`.
+`employed`, `avg_wallet_cents`, `avg_mood`, `mood_bands`, daily
+`taxes_paid_cents`, `rent_paid_cents`, `bills_paid_cents`, plus aggregate
+`arrears_cents` and `in_arrears`. Each person also has an integer `mood` and
+the payment and arrears fields described below.
+
+## Phase 4 taxes and bills
+
+Each day, wages are credited after withholding 10% income tax (`wage_cents // 10`).
+Unemployed residents also receive the previous economy tick's
+`benefit_per_head_cents`, if present; that $7.50 starting benefit is not taxed.
+Then old rent arrears, old utility arrears, today's $6 rent, and today's $1.50
+utilities are paid in that order, before shopping. Old arrears may be paid
+partially; a new bill is paid in full or its full amount becomes arrears.
+`missed_rent` and `missed_bill` events carry `resident_id` and `amount_cents`
+when a current bill is missed. Neither payment nor mood logic draws RNG.
+Wallets cannot go below zero.
+
+The root `taxes_paid_cents`, `rent_paid_cents`, and `bills_paid_cents` are
+**daily actual payments**. `bills_paid_cents` means utilities only, including
+payments against older utility arrears; rent is separate and leaves town.
+Tax and utilities are available for the economy's treasury that day. Each
+person carries `rent_arrears_cents`, `utility_arrears_cents`, their sum in
+`arrears_cents`, and daily `taxes_paid_cents`, `rent_paid_cents`, and
+`utilities_paid_cents` plus `benefit_received_cents`. The root
+`benefits_received_cents` sums benefits credited that day. The root
+`arrears_cents` sums unpaid amounts, while
+`in_arrears` counts people with any unpaid amount.
 
 ## Phase 3 mood
 
@@ -60,7 +86,7 @@ any other economic decision. Each tick recomputes it after wages and purchases:
 
 ```text
 mood = clamp(40 + wallet_points + employment_points + purchase_points
-             - weather_penalty, 0, 100)
+             - weather_penalty - arrears_penalty, 0, 100)
 ```
 
 - Wallet points: one point per complete 1,000 cents ($10) of remaining wallet,
@@ -72,19 +98,21 @@ mood = clamp(40 + wallet_points + employment_points + purchase_points
   resets each tick. Wallet points use the balance after paying for purchases.
 - Weather penalties: sun 0, cloud 5, rain 10, snow 15, storm 25. Missing,
   invalid, or unknown weather has no penalty, matching the sun fallback.
+- Arrears penalty: 15 points while any rent or utility payment is overdue.
 - Bands: `happy` = 70–100, `ok` = 40–69, `unhappy` = 0–39. `mood_bands`
   always contains all three integer counts, totaling 120. `avg_mood` is the
   floor of the sum of scores divided by 120.
 - Setup initializes mood from starting wallets and jobs, with no purchases
   and neutral weather. It does not read another system's state.
-- No mood history, events, or RNG draws. Existing shopping RNG calls remain
-  unchanged. Only the new mood fields are written by the derived calculation.
+- No mood history, mood events, or RNG draws. Shopping retains its existing
+  random calls; available cash can change which purchases are affordable.
 
 `fixtures/phase2_residents.py` is a frozen test reference from main commit
 `1c3a689c0c575a9c0413c36a714334682b94923e`, not a second production system.
-Regression tests compare UTF-8 JSON bytes for all pre-existing resident fields
-and exact RNG states at setup and after every tick, with and without businesses,
-across seeds 1, 42, and 99. Do not update the reference alongside mood changes.
+The Phase 3 regression compared UTF-8 JSON bytes for all pre-existing resident
+fields and exact RNG states at setup and after every tick. Phase 4 changes
+wallets and affordability by design; current tests still compare the setup
+roster and no-shopping RNG states against the frozen reference.
 
 Full-town validation against that main revision (CSV logging disabled, no
 scratch/output files) also compared every day's non-mood state bytes, RNG state,
@@ -92,8 +120,7 @@ and events for seed 42 and seeds 1–20 over 90 days: all identical. Seed 42 end
 with 6 shops open, $500.88 average wallet, and no zero-balance streaks. Mood is
 65 on average, with 87 happy, 15 ok, and 18 unhappy residents. 18/20 seeds meet
 all balance targets; seeds 10 and 17 fail in both baseline and mood runs.
-This is the current main baseline; the older Phase 2 archive results below
-are historical. Thirteen standalone resident tests pass.
+These Phase 3 results and the older Phase 2 archive below are historical.
 
 Run standalone tests from the repository root:
 
@@ -151,7 +178,7 @@ installed systems and the log's `csv_path=None` before setup. It prints to
 stdout and creates no reports, CSVs, or scratch files. Use Python's `-B` option
 if you also want to suppress interpreter bytecode caches.
 
-Each row shows day, weather, job, actual wages received, successful purchases
+Each row shows day, weather, job, actual gross wages and benefits received, successful purchases
 (shop ID and the actual price paid), wallet after, and mood. Assumptions:
 
 - IDs are exact integers; full names match case-insensitively with surrounding
@@ -168,10 +195,10 @@ Each row shows day, weather, job, actual wages received, successful purchases
   The diary stores receipts outside town state and emits no events. The hook
   adds no RNG draws and does not alter purchase selection or wages.
 - A wrapper snapshots wallets immediately before the residents tick and
-  records rows immediately after it. Actual wage income is the closing wallet
-  minus opening wallet plus receipts. This uses the residents model's rule
-  that wages and purchases are the only daily wallet movements, so partial
-  shop payments and weekday outside wages are both counted exactly. Starting
+  records rows immediately after it. Actual gross wage income is the closing
+  wallet minus opening wallet plus receipts, taxes, rent, and utilities paid,
+  then minus benefits received. This includes arrears payments and keeps the
+  reported wage exact. Starting
   savings are excluded from total earned. Prices are captured at purchase
   time, so later price changes cannot rewrite history.
 - Favourite shop means most successful purchases; ties use ascending shop ID.

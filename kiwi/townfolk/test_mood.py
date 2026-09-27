@@ -1,7 +1,6 @@
-"""Mood contract and byte-for-byte comparison against the frozen Phase 2 system."""
+"""Mood contract and setup/RNG comparison against the frozen Phase 2 system."""
 
 import copy
-import json
 from pathlib import Path
 import runpy
 import unittest
@@ -12,38 +11,27 @@ from kiwi.townfolk.test_residents import Town, businesses
 Phase2System = runpy.run_path(str(Path(__file__).parent / "fixtures" / "phase2_residents.py"))["System"]
 
 
-def economic_bytes(state):
-    state = copy.deepcopy(state)
-    state.pop("avg_mood", None)
-    state.pop("mood_bands", None)
-    for person in state["people"]:
-        person.pop("mood", None)
-    return json.dumps(state, separators=(",", ":")).encode("utf-8")
-
-
 class MoodTests(unittest.TestCase):
-    def test_economy_bytes_and_rng_identical_to_phase2(self):
+    def test_setup_roster_and_no_shopping_rng_identical_to_phase2(self):
         for seed in (1, 42, 99):
-            for installed in (False, True):
-                before, after = Town(seed), Town(seed)
-                old, new = Phase2System(), System()
-                old.setup(before)
-                new.setup(after)
-                for day in range(91):
-                    with self.subTest(seed=seed, installed=installed, day=day):
-                        self.assertEqual(economic_bytes(before.state["residents"]),
-                                         economic_bytes(after.state["residents"]))
-                        self.assertEqual(before.rng.getstate(), after.rng.getstate())
-                    if day == 90:
-                        break
-                    inputs = {"weather": {"condition": ("sun", "cloud", "rain", "snow", "storm", None, ["bad"])[day % 7]}}
-                    if installed:
-                        inputs["businesses"] = businesses(capacity=day % 13, price=100 + day * 71)
-                        inputs["businesses"]["wages_paid"] = {1: 725, 2: day * 5}
-                    for town, system in ((before, old), (after, new)):
-                        town.state.update(copy.deepcopy(inputs))
-                        town.day = day + 1
-                        system.tick(town)
+            before, after = Town(seed), Town(seed)
+            old, new = Phase2System(), System()
+            old.setup(before)
+            new.setup(after)
+            self.assertEqual(before.rng.getstate(), after.rng.getstate())
+            old_people = before.state["residents"]["people"]
+            new_people = after.state["residents"]["people"]
+            self.assertEqual([{key: p[key] for key in ("id", "name", "street", "job", "wallet_cents")}
+                              for p in old_people],
+                             [{key: p[key] for key in ("id", "name", "street", "job", "wallet_cents")}
+                              for p in new_people])
+            for day in range(1, 91):
+                for town, system in ((before, old), (after, new)):
+                    town.state["weather"] = {"condition": "storm"}
+                    town.day = day
+                    system.tick(town)
+                with self.subTest(seed=seed, day=day):
+                    self.assertEqual(before.rng.getstate(), after.rng.getstate())
 
     def test_bounds_bands_and_integer_average(self):
         people = [{"id": index, "wallet_cents": wallet, "job": job}
@@ -104,17 +92,17 @@ class MoodTests(unittest.TestCase):
         for person in town.state["residents"]["people"]:
             person.update(wallet_cents=0, job=None)
         people = town.state["residents"]["people"]
-        people[0]["wallet_cents"] = 10501
+        people[0]["wallet_cents"] = 11251
         town.state["businesses"] = businesses(capacity=120, price=500)
         system.tick(town)
         self.assertEqual(people[0]["wallet_cents"], 9501)
         self.assertEqual(people[0]["mood"], 49)  # two purchases, one bonus
-        self.assertEqual(people[1]["mood"], 30)  # attempted, but unaffordable
+        self.assertEqual(people[1]["mood"], 15)  # missed bills lower mood
         town.state.pop("businesses")
         town.day = 7
         system.tick(town)
-        self.assertEqual(people[0]["mood"], 39)
-        self.assertEqual(people[1]["mood"], 30)
+        self.assertEqual(people[0]["mood"], 38)
+        self.assertEqual(people[1]["mood"], 15)
 
 
 if __name__ == "__main__":
