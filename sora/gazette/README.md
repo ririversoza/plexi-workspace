@@ -29,6 +29,7 @@ Week N covers days `7(N-1)+1` to `7N`. A 90-day run has 13 weeks, and week 13 is
 | Shop table | per shop: days `open`, units sold (sum of daily `residents.purchases`; an empty dict counts as 0, and `?` means residents never reported purchases), and `balance_cents` on the last day of the week |
 | Prices* | each `price_change` event this week: `Shop $old -> $new` |
 | Wallets | `residents.count` and `avg_wallet_cents` on the last day, plus the change since the end of last week |
+| Taxes & bills* | Phase 4: the week's total `economy.tax_income` and `utility_income` (what the treasury actually collected), plus `residents.in_arrears` people behind (with `arrears_cents` owed) and the number of shops whose `arrears_cents` is above 0 (with the total owed), each only when those keys exist |
 | Mood of the town* | `residents.avg_mood` on the last day and its change since the end of last week, plus each `mood_bands` count and its change |
 | Traffic / Emergency | the week's total `traffic.accidents_today` and average `congestion`, and total `emergency.incidents_today` / `responded`. When `traffic.bus_running` is present, it adds `bus ran N days (R riders)` (sum of `bus_riders`) or `no bus` |
 | Streets* | the street with the most incidents this week (sum of daily `emergency.incidents_by_street`, ties go to the name that sorts first), or `no incidents on any street` |
