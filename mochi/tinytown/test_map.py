@@ -48,16 +48,16 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual(
             snap["streets"],
             [
-                {"name": "Clover Lane", "homes": 0, "incidents": 1, "busiest": False},
-                {"name": "Maple Street", "homes": 2, "incidents": 0, "busiest": False},
-                {"name": "Willow Way", "homes": 1, "incidents": 2, "busiest": True},
+                {"name": "Clover Lane", "homes": 0, "incidents": 1, "busiest": False, "behind": None},
+                {"name": "Maple Street", "homes": 2, "incidents": 0, "busiest": False, "behind": None},
+                {"name": "Willow Way", "homes": 1, "incidents": 2, "busiest": True, "behind": None},
             ],
         )
 
     def test_shops_keep_state_order_and_fields(self):
         shops = town_map.snapshot(town_state())["shops"]
         self.assertEqual([s["id"] for s in shops], ["rich", "broke", "shut"])
-        self.assertEqual(shops[2], {"id": "shut", "name": "Shut Shop", "balance_cents": 12_000, "open": False})
+        self.assertEqual(shops[2], {"id": "shut", "name": "Shut Shop", "balance_cents": 12_000, "open": False, "arrears_cents": None})
 
     def test_empty_town_has_no_shops_or_streets(self):
         snap = town_map.snapshot({})

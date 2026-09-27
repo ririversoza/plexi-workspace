@@ -15,7 +15,7 @@ import argparse
 import importlib
 import sys
 
-from mochi.tinytown import history
+from mochi.tinytown import bills, history
 
 DAYS = 90
 SEED = 42
@@ -206,6 +206,29 @@ def mood_line(residents):
     return f"  mood: avg {avg_text} | {bands_text}"
 
 
+def money_or_na(value):
+    return cents(value) if is_number(value) else "n/a"
+
+
+def bills_panel(state):
+    """Phase 4 taxes, bills, rent and arrears (today's cents); [] before any key exists."""
+    if not bills.reported(state):
+        return []
+    s = bills.summary(state)
+
+    def behind(who, count, owed):
+        return f"{who} {count if count is not None else 'n/a'} ({money_or_na(owed)} owed)"
+
+    return [
+        f"BILLS TODAY  residents: tax {money_or_na(s['resident_taxes'])} | "
+        f"utilities {money_or_na(s['resident_bills'])} | rent {money_or_na(s['resident_rent'])}",
+        f"             shops:     tax {money_or_na(s['shop_taxes'])} | "
+        f"licence {money_or_na(s['shop_bills'])} | rent {money_or_na(s['shop_rent'])}",
+        f"             behind:    {behind('residents', s['residents_behind'], s['resident_arrears'])} | "
+        f"{behind('shops', s['shops_behind'], s['shop_arrears'])}",
+    ]
+
+
 def traffic_text(state):
     traffic = state.get("traffic")
     if not isinstance(traffic, dict):
@@ -303,6 +326,8 @@ def render(state, day, days=DAYS, base_prices=None):
     lines = [title.center(RULE_WIDTH, "="), weather_banner(state), ""]
     lines += storefronts(state, base_prices) + [""]
     lines += residents_panel(state) + [""]
+    panel = bills_panel(state)
+    lines += panel + [""] if panel else []
     lines += ticker(state)
     lines.append("=" * RULE_WIDTH)
     return "\n".join(lines)
