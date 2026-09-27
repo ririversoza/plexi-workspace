@@ -53,6 +53,7 @@ def dollars(value):
         return "?"
     if isinstance(value, int):
         return cents(value * 100)
+    value = round(value, 2)  # before the sign check: -0.001 is "$0.00", not "-$0.00"
     return f"{'-' if value < 0 else ''}${abs(value):,.2f}"
 
 
