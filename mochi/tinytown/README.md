@@ -1,6 +1,6 @@
 # Tiny Town — event log + debug tools (Mochi)
 
-Records every event the town emits, writes it to `events.csv`, and lets you ask
+Records every event the town emits, writes it to a CSV in the system temp dir, and lets you ask
 "what happened on day N?" from the command line. Written against
 [`juniper/TINYTOWN.md`](../../juniper/TINYTOWN.md) only; no dependency on the engine or
 any other system. Stdlib only.
@@ -27,7 +27,7 @@ Nothing in the town itself. The log is an observer:
 
 State read from other systems: **none**.
 
-## `events.csv`
+## The event CSV
 
 Columns: `day,system,kind,data_json`.
 
@@ -41,9 +41,12 @@ Rows are appended as each event arrives (open/append/close per event), so a run 
 crashes midway still leaves a readable log up to the crash. That's about 1 small write
 per event, which is negligible at 90 days.
 
-Default path is `events.csv` in the current directory (normally the repo root when
-running `taro/tinytown/run.py`). Use `System(csv_path="somewhere.csv")` or
-`System(csv_path=None)` to change or disable it. Don't commit the generated file.
+**Default path:** `tinytown-events.csv` in the system temp dir, i.e.
+`os.path.join(tempfile.gettempdir(), "tinytown-events.csv")` (see `default_csv_path()`). It is
+resolved when `System()` is created, so it honours `$TMPDIR`. A default run, such as
+`python3 -m taro.tinytown.run` from the repo root, never writes into the current directory,
+and each run overwrites the previous one. Use `System(csv_path="somewhere.csv")` to choose
+a file, or `System(csv_path=None)` to keep the log in memory only.
 
 `mochi.tinytown.csvlog` has `read_events(path)` / `write_events(path, events)` for
 anyone who wants to load a run back into Python.
@@ -51,8 +54,11 @@ anyone who wants to load a run back into Python.
 ## Inspecting a day
 
 ```
-python3 -m mochi.tinytown.inspect <day> [--csv events.csv] [--system NAME]
+python3 -m mochi.tinytown.inspect <day> [--csv PATH] [--system NAME]
 ```
+
+Without `--csv` it reads the same default file the log writes (`default_csv_path()`), so
+`run` and then `inspect` work with no flags.
 
 ```
 $ python3 -m mochi.tinytown.inspect 3
@@ -88,7 +94,7 @@ system: it never ticks, emits or touches `town.rng`.
 Systems come from the engine's own `SYSTEM_MODULES`, so the viewer only loads what that
 engine version ticks. Anything missing is drawn as `not built yet`, and odd or missing
 keys show `?` instead of crashing. The log is loaded with `csv_path=None`, so viewing
-never writes `events.csv`. With no engine installed at all it exits with status 1 and a
+never writes the event CSV. With no engine installed at all it exits with status 1 and a
 one-line message. `--day` outside 1..90 is rejected.
 
 ## Tests
@@ -104,8 +110,8 @@ importable it also runs the real town: default day 90 with no files written, `--
 gives 90 frames in order, the same seed gives the same picture, and a single day matches
 that day's `--every` frame.
 
-They use a small fake `Town` that follows the contract interface (no engine needed) and
-cover:
+`test_log.py` uses a small fake `Town` that follows the contract interface (no engine needed) and
+covers:
 - **Determinism:** the same seed gives byte-identical CSVs and the same state, and the log leaves
   `town.rng` and the event stream exactly as they'd be without it.
 - **CSV round-trip:** a full run and awkward values (commas, quotes, newlines, nesting,
@@ -113,3 +119,7 @@ cover:
 - **Running with no other systems:** a 90-day run alone gives an empty log with only the header, and `inspect`
   still works.
 - Recording order and completeness, including events emitted before the log's own setup.
+- **Default path:** with `tempfile.tempdir` pointed at a throwaway dir and the cwd at
+  another, a default run writes only to `<tempdir>/tinytown-events.csv` and leaves the cwd
+  empty. `inspect` with no `--csv` reads that same file, and `csv_path=None` still disables
+  it. When `taro.tinytown` is importable, a real default engine run is checked the same way.

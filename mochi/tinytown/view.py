@@ -5,7 +5,7 @@
 Runs every installed system through ``taro.tinytown`` (seed 42, 90 days) and draws
 day N (default 90), or every day with ``--every``. Anything not installed yet is
 drawn as "not built yet". The log is loaded with ``csv_path=None`` so viewing never
-writes ``events.csv``.
+writes the event CSV.
 """
 
 import argparse

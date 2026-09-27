@@ -1,13 +1,15 @@
 """Print what happened on one day of a Tiny Town run.
 
-Usage: python3 -m mochi.tinytown.inspect <day> [--csv events.csv] [--system NAME]
+Usage: python3 -m mochi.tinytown.inspect <day> [--csv PATH] [--system NAME]
+
+Without --csv it reads the log's default file in the system temp dir.
 """
 
 import argparse
 import json
 import sys
 
-from mochi.tinytown import DEFAULT_CSV_PATH, csvlog
+from mochi.tinytown import csvlog, default_csv_path
 
 
 def format_data(event):
@@ -52,12 +54,16 @@ def main(argv=None):
         description="Print what happened on one day of a Tiny Town run.",
     )
     parser.add_argument("day", type=int, help="day number (0 = setup, 1..90)")
-    parser.add_argument("--csv", default=DEFAULT_CSV_PATH, help="event log to read (default: events.csv)")
+    parser.add_argument(
+        "--csv",
+        default=None,
+        help=f"event log to read (default: the log's temp-dir file, {default_csv_path()})",
+    )
     parser.add_argument("--system", help="only show events from this system")
     args = parser.parse_args(argv)
 
     try:
-        events = csvlog.read_events(args.csv)
+        events = csvlog.read_events(args.csv or default_csv_path())
     except (OSError, ValueError) as error:
         print(f"inspect: cannot read event log: {error}", file=sys.stderr)
         return 2
