@@ -15,6 +15,7 @@ from sora.gazette import (
     load_systems,
     main,
     render,
+    render_week,
     snapshot,
     week_number,
     week_of,
@@ -134,6 +135,98 @@ class HeadlineTest(unittest.TestCase):
 
     def test_quiet_week(self):
         self.assertEqual(headline([], []), "QUIET WEEK IN TINY TOWN")
+
+
+def phase2_week(extra=lambda n: {}):
+    """Seven days with only Phase 2 keys; ``extra(n)`` merges more state into day n."""
+    shops = {"one-mug-tea": {"name": "One Mug Tea", "open": True, "balance_cents": 50000}}
+    days = []
+    for n in range(1, 8):
+        state = {
+            "weather": {"condition": "sun", "temp_c": 10 + n},
+            "businesses": {"shops": shops, "open_count": 1},
+            "residents": {"count": 3, "avg_wallet_cents": 1000 + n, "purchases": {"one-mug-tea": 2}},
+            "economy": {"treasury": 1000.0},
+            "traffic": {"accidents_today": 0, "congestion": 0.25},
+            "emergency": {"incidents_today": 1, "responded": 1},
+        }
+        for system, keys in extra(n).items():
+            state[system] = {**state[system], **keys}
+        days.append(day(n, **state))
+    return days
+
+
+# Rendered by the gazette before Phase 3 sections existed (#36); must not change.
+PHASE2_GOLDEN = (
+    "============================================================\n"
+    "       THE TINY TOWN GAZETTE  |  Week 1  |  Days 1-7        \n"
+    "============================================================\n"
+    "ONE MUG TEA TOPS SALES WITH 14 UNITS\n"
+    "------------------------------------------------------------\n"
+    "Weather: 7 sun | 11 to 17 C\n"
+    "\n"
+    "Shop                       Open  Sold      Balance\n"
+    "One Mug Tea                  7d    14      $500.00\n"
+    "\n"
+    "Wallets: 3 residents, average $10.07 (+$0.06 this week)\n"
+    "Traffic: 0 accidents, congestion 25% | Emergency: 7 incidents, 7 responded"
+)
+
+
+class Phase3SectionsTest(unittest.TestCase):
+    def issue(self, extra=lambda n: {}, events=(), before=None):
+        return render_week(phase2_week(extra), list(events), 1, before)
+
+    def test_week_without_new_keys_is_byte_identical(self):
+        self.assertEqual(self.issue(), PHASE2_GOLDEN)
+
+    def test_town_hall(self):
+        building = self.issue(lambda n: {"economy": {"project": {"name": "park", "progress": 0.9999}, "projects_completed": []}})
+        self.assertIn("Town Hall: building park (99%)", building)
+        for progress, shown in ((0.58, "58%"), (0.999999999, "99%")):  # 0.58 * 100 == 57.999...
+            text = self.issue(lambda n: {"economy": {"project": {"name": "park", "progress": progress}}})
+            self.assertIn(f"Town Hall: building park ({shown})", text)
+        done = self.issue(lambda n: {"economy": {"project": None, "projects_completed": ["park"] if n >= 3 else []}})
+        self.assertIn("Town Hall: park completed", done)
+        idle = self.issue(lambda n: {"economy": {"project": None, "projects_completed": ["park"]}},
+                          before=day(0, economy={"projects_completed": ["park"]}))
+        self.assertIn("Town Hall: no project under way", idle)
+        self.assertNotIn("Town Hall", self.issue())
+
+    def test_mood(self):
+        text = self.issue(lambda n: {"residents": {"avg_mood": 50 + n, "mood_bands": {"happy": n, "ok": 3 - n // 7}}})
+        self.assertIn("Mood of the town: 57 average (+6 this week) | happy 7 (+6), ok 2 (-1)", text)
+        self.assertNotIn("Mood of the town", self.issue())
+
+    def test_prices(self):
+        move = {"day": 7, "kind": "price_change", "shop_id": "one-mug-tea", "old_price_cents": 325, "new_price_cents": 309}
+        self.assertIn("Prices: One Mug Tea $3.25 -> $3.09", self.issue(events=[move]))
+        self.assertNotIn("Prices", self.issue(events=[{**move, "kind": "daily"}]))
+
+    def test_busiest_street(self):
+        streets = lambda n: {"emergency": {"incidents_by_street": {"Willow Way": 1, "Clover Lane": 1, "Maple Street": 0}}}
+        self.assertIn("Streets: busiest for incidents was Clover Lane (7)", self.issue(streets))  # tie: alphabetical
+        quiet = lambda n: {"emergency": {"incidents_by_street": {"Willow Way": 0}}}
+        self.assertIn("Streets: no incidents on any street", self.issue(quiet))
+        self.assertNotIn("Streets:", self.issue())
+
+    def test_bus_days(self):
+        bus = lambda n: {"traffic": {"bus_running": n <= 2, "bus_riders": 15 if n <= 2 else 0}}
+        self.assertIn("congestion 25%, bus ran 2 days (30 riders) |", self.issue(bus))
+        self.assertIn("congestion 25%, no bus |", self.issue(lambda n: {"traffic": {"bus_running": False}}))
+        self.assertNotIn("bus", self.issue())
+
+    def test_project_completion_headline_comes_first(self):
+        days = [day(n, traffic={"accidents_today": 2}, economy={"projects_completed": ["park"] if n == 4 else []})
+                for n in range(1, 5)]
+        self.assertEqual(headline(days, []), "TOWN OPENS NEW PARK")
+
+    def test_mood_swing_headline(self):
+        storm = [{"day": 2, "kind": "shops_closed", "reason": "storm"}]
+        big = [day(1, residents={"avg_mood": 60}), day(2, residents={"avg_mood": 50})]
+        self.assertEqual(headline(big, storm), "TOWN MOOD SINKS 10 POINTS")
+        small = [day(1, residents={"avg_mood": 60}), day(2, residents={"avg_mood": 51})]
+        self.assertEqual(headline(small, storm), "STORM SHUTS EVERY SHOP ON 1 DAY")
 
 
 if __name__ == "__main__":

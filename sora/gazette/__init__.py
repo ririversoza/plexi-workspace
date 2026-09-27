@@ -9,6 +9,7 @@ See README.md for the headline rules.
 import argparse
 import copy
 import importlib
+import math
 from collections import Counter
 
 DAYS = 90
@@ -30,6 +31,7 @@ NOT_REPORTED = "no reporter on this beat yet"
 
 ACCIDENT_SPIKE = 8            # accidents in one week that make the front page
 TREASURY_SWING_DOLLARS = 100  # a gain this big (or any drop) makes the front page
+MOOD_SWING = 10               # avg mood points gained or lost in a week that make the front page
 WIDTH = 60
 
 
@@ -126,11 +128,39 @@ def shop_names(days):
     return names
 
 
+def projects_finished(days, before):
+    """Project names completed this week, from economy.projects_completed."""
+    lists = [get(d, "economy", "projects_completed") for d in days]
+    lists = [x for x in lists if isinstance(x, list)]
+    if not lists:
+        return []
+    start = get(before, "economy", "projects_completed") if before else None
+    start = start if isinstance(start, list) else []
+    return [name for name in lists[-1] if name not in start]
+
+
+def mood_change(days, before):
+    """Change in residents.avg_mood since the end of last week (week 1: since day 1)."""
+    values = [num(get(d, "residents", "avg_mood")) for d in ([before] if before else []) + days]
+    values = [v for v in values if v is not None]
+    return values[-1] - values[0] if len(values) > 1 else None
+
+
+def signed(value):
+    return f"{'+' if value >= 0 else '-'}{abs(value)}"
+
+
 def headline(days, events, before=None):
     """The first rule that fires, in the order documented in README.md."""
+    finished = projects_finished(days, before)
+    if finished:
+        return f"TOWN OPENS NEW {' AND '.join(name.upper() for name in finished)}"
     crashes = accidents(days)
     if crashes is not None and crashes >= ACCIDENT_SPIKE:
         return f"ACCIDENT SPIKE: {crashes} CRASHES ON TOWN ROADS"
+    swing = mood_change(days, before)
+    if swing is not None and abs(swing) >= MOOD_SWING:
+        return f"TOWN MOOD {'LIFTS' if swing > 0 else 'SINKS'} {abs(swing)} POINTS"
     storms = storm_days(days, events)
     if storms:
         return f"STORM SHUTS EVERY SHOP ON {storms} DAY{'S' if storms > 1 else ''}"
@@ -188,6 +218,10 @@ def streets_line(days):
     congestion = [c for c in (num(get(d, "traffic", "congestion")) for d in days) if c is not None]
     if congestion:
         traffic = f"Traffic: {accidents(days) or 0} accidents, congestion {sum(congestion) / len(congestion):.0%}"
+        if any(isinstance(get(d, "traffic", "bus_running"), bool) for d in days):
+            bus_days = sum(1 for d in days if get(d, "traffic", "bus_running") is True)
+            riders = sum(num(get(d, "traffic", "bus_riders")) or 0 for d in days)
+            traffic += f", bus ran {bus_days} day{'' if bus_days == 1 else 's'} ({riders} riders)" if bus_days else ", no bus"
     else:
         traffic = f"Traffic: {NOT_REPORTED}"
     incidents = [i for i in (num(get(d, "emergency", "incidents_today")) for d in days) if i is not None]
@@ -197,6 +231,79 @@ def streets_line(days):
     else:
         emergency = f"Emergency: {NOT_REPORTED}"
     return f"{traffic} | {emergency}"
+
+
+def prices_line(days, events):
+    """Price moves from this week's price_change events; None when there were none."""
+    moves = [e for e in events if e.get("kind") == "price_change"]
+    moves = [e for e in moves if num(e.get("old_price_cents")) is not None and num(e.get("new_price_cents")) is not None]
+    if not moves:
+        return None
+    names = shop_names(days)
+    changes = [
+        f"{names.get(e.get('shop_id'), e.get('shop_id', '?'))} {cents(e['old_price_cents'])} -> {cents(e['new_price_cents'])}"
+        for e in moves
+    ]
+    return "Prices: " + ", ".join(changes)
+
+
+def mood_line(days, before=None):
+    last = get(days[-1], "residents", "avg_mood") if days else None
+    if num(last) is None:
+        return None
+    line = f"Mood of the town: {last} average"
+    change = mood_change(days, before)
+    if change is not None:
+        line += f" ({signed(change)} this week)"
+    bands = get(days[-1], "residents", "mood_bands")
+    if isinstance(bands, dict):
+        start = get(before or days[0], "residents", "mood_bands")
+        start = start if isinstance(start, dict) else {}
+        parts = []
+        for band, count in bands.items():
+            if num(count) is None:
+                continue
+            delta = f" ({signed(count - start[band])})" if num(start.get(band)) is not None else ""
+            parts.append(f"{band} {count}{delta}")
+        if parts:
+            line += " | " + ", ".join(parts)
+    return line
+
+
+def busiest_street_line(days):
+    """Street with the most incidents this week (ties: alphabetical); None without street data."""
+    totals = Counter()
+    seen = False
+    for d in days:
+        streets = get(d, "emergency", "incidents_by_street")
+        if isinstance(streets, dict):
+            seen = True
+            totals.update({street: n for street, n in streets.items() if num(n) is not None})
+    if not seen:
+        return None
+    if not +totals:
+        return "Streets: no incidents on any street"
+    street, count = min(totals.items(), key=lambda item: (-item[1], str(item[0])))
+    return f"Streets: busiest for incidents was {street} ({count})"
+
+
+def town_hall_line(days, before=None):
+    """Public works: completions this week and the current project; None without the keys."""
+    if not any("project" in as_dict(d.get("economy")) or "projects_completed" in as_dict(d.get("economy")) for d in days):
+        return None
+    parts = [f"{name} completed" for name in projects_finished(days, before)]
+    project = get(days[-1], "economy", "project")
+    if isinstance(project, dict) and num(project.get("progress")) is not None:
+        progress = project["progress"]
+        # round() absorbs float error (0.58 * 100 == 57.999...); floor and the cap keep
+        # an unfinished project below 100%.
+        percent = math.floor(round(progress * 100, 6))
+        if progress < 1:
+            percent = min(percent, 99)
+        parts.append(f"building {project.get('name', '?')} ({percent}%)")
+    elif not parts:
+        parts.append("no project under way")
+    return "Town Hall: " + " | ".join(parts)
 
 
 def render_week(days, events, week, before=None):
@@ -213,11 +320,20 @@ def render_week(days, events, week, before=None):
             weather_line(days),
             "",
             *shop_table(days),
+            *optional(prices_line(days, events)),
             "",
             wallets_line(days, before),
+            *optional(mood_line(days, before)),
             streets_line(days),
+            *optional(busiest_street_line(days)),
+            *optional(town_hall_line(days, before)),
         ]
     )
+
+
+def optional(line):
+    """A section that only prints when its system reported something."""
+    return [] if line is None else [line]
 
 
 def render(days_seen, events, weeks):
