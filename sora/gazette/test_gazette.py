@@ -217,6 +217,28 @@ class Phase3SectionsTest(unittest.TestCase):
         self.assertIn("congestion 25%, no bus |", self.issue(lambda n: {"traffic": {"bus_running": False}}))
         self.assertNotIn("bus", self.issue())
 
+    def test_taxes_and_bills(self):
+        self.assertNotIn("Taxes & bills", self.issue())
+        paid = lambda n: {"economy": {"tax_income": 1.5, "utility_income": 180.25}}
+        self.assertIn("Taxes & bills: treasury took $10.50 in taxes and $1,261.75 in utilities\n", self.issue(paid))
+        dimes = self.issue(lambda n: {"economy": {"tax_income": 0.1 if n <= 3 else None, "utility_income": 0.0}})
+        self.assertIn("treasury took $0.30 in taxes", dimes)  # not $0.30000000000000004 or $0.31
+
+    def test_taxes_and_bills_arrears(self):
+        shops = {"one-mug-tea": {"name": "One Mug Tea", "open": True, "balance_cents": 0, "arrears_cents": 800},
+                 "fold-post": {"name": "Fold Post", "open": True, "balance_cents": 0, "arrears_cents": 0}}
+        behind = lambda n: {"economy": {"tax_income": 1.0, "utility_income": 1.0},
+                            "residents": {"in_arrears": 2, "arrears_cents": 1200}, "businesses": {"shops": shops}}
+        self.assertIn("in utilities | 2 residents behind ($12.00 owed) | 1 shop behind ($8.00 owed)\n", self.issue(behind))
+        paid_up = {sid: {**shop, "arrears_cents": 0} for sid, shop in shops.items()}
+        clear = lambda n: {"economy": {"tax_income": 1.0, "utility_income": 1.0},
+                           "residents": {"in_arrears": 1, "arrears_cents": 0}, "businesses": {"shops": paid_up}}
+        self.assertIn("in utilities | 1 resident behind | 0 shops behind\n", self.issue(clear))
+
+    def test_taxes_and_bills_in_html(self):
+        days = phase2_week(lambda n: {"economy": {"tax_income": 1.0, "utility_income": 2.0}})
+        self.assertIn("Taxes &amp; bills:</span> treasury took $7.00 in taxes and $14.00 in utilities", render_html(days, [], [1]))
+
     def test_project_completion_headline_comes_first(self):
         days = [day(n, traffic={"accidents_today": 2}, economy={"projects_completed": ["park"] if n == 4 else []})
                 for n in range(1, 5)]

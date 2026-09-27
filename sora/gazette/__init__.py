@@ -280,6 +280,30 @@ def mood_line(days, before=None):
     return line
 
 
+def taxes_line(days):
+    """Phase 4: what the treasury collected this week, and who is behind; None without the keys."""
+    taxes = [num(get(d, "economy", "tax_income")) for d in days]
+    utilities = [num(get(d, "economy", "utility_income")) for d in days]
+    if all(v is None for v in taxes + utilities):
+        return None
+    collected = lambda values: round(sum(v for v in values if v is not None), 2)
+    parts = [f"treasury took ${collected(taxes):,.2f} in taxes and ${collected(utilities):,.2f} in utilities"]
+    residents = as_dict(days[-1].get("residents"))
+    if num(residents.get("in_arrears")) is not None:
+        parts.append(behind_text(residents["in_arrears"], "resident", num(residents.get("arrears_cents")) or 0))
+    shops = as_dict(get(days[-1], "businesses", "shops"))
+    if any("arrears_cents" in as_dict(shop) for shop in shops.values()):
+        owing = [max(0, num(as_dict(shop).get("arrears_cents")) or 0) for shop in shops.values()]
+        parts.append(behind_text(sum(1 for owed in owing if owed), "shop", sum(owing)))
+    return "Taxes & bills: " + " | ".join(parts)
+
+
+def behind_text(count, noun, owed_cents):
+    """"2 residents behind ($12.00 owed)"; the amount only when something is owed."""
+    text = f"{count} {noun}{'' if count == 1 else 's'} behind"
+    return text + (f" ({cents(owed_cents)} owed)" if owed_cents > 0 else "")
+
+
 def busiest_street_line(days):
     """Street with the most incidents this week (ties: alphabetical); None without street data."""
     totals = Counter()
@@ -333,6 +357,7 @@ def render_week(days, events, week, before=None):
             *optional(prices_line(days, events)),
             "",
             wallets_line(days, before),
+            *optional(taxes_line(days)),
             *optional(mood_line(days, before)),
             streets_line(days),
             *optional(busiest_street_line(days)),
