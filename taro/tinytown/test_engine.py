@@ -31,6 +31,7 @@ from taro.tinytown.run import (
     parse_seed_range,
     shop_leaderboard,
     snapshot_day,
+    validate_export_path,
     write_timeline,
 )
 
@@ -564,21 +565,68 @@ class ExportTests(unittest.TestCase):
     def test_build_timeline_and_events_by_kind(self) -> None:
         daily: list = []
         weather = FakeSystem("weather")
+        businesses = FakeSystem("businesses")
 
         def on_day(t: Town) -> None:
             daily.append(snapshot_day(t))
 
-        town = run_town([weather], days=2, seed=3, on_day=on_day)
+        town = run_town([weather, businesses], days=2, seed=3, on_day=on_day)
         town.emit("bonus")
-        timeline = build_timeline(town, [weather], daily)
+        timeline = build_timeline(town, [weather, businesses], daily)
         self.assertEqual(timeline["seed"], 3)
         self.assertEqual(timeline["days"], 2)
-        self.assertEqual(timeline["systems"], ["weather"])
+        self.assertEqual(timeline["systems"], ["weather", "businesses"])
         self.assertEqual(len(timeline["daily"]), 2)
         self.assertEqual(timeline["daily"][0]["day"], 1)
-        self.assertIn("tick", timeline["events_by_kind"])
-        self.assertEqual(count_events_by_kind(town)["bonus"], 1)
+        # Keys are system.kind so weather and businesses both emitting 'tick' do not collide.
+        self.assertIn("weather.tick", timeline["events_by_kind"])
+        self.assertIn("businesses.tick", timeline["events_by_kind"])
+        self.assertNotIn("tick", timeline["events_by_kind"])
+        self.assertEqual(count_events_by_kind(town)[".bonus"], 1)
         self.assertNotIn("events", timeline)
+
+    def test_snapshot_day_deep_copies_nested_state(self) -> None:
+        town = Town(seed=1)
+        town.day = 1
+        nested = {"nested": {"temp_c": 20.0}}
+        town.state["weather"] = {"condition": "sun", "extra": nested}
+        snap = snapshot_day(town)
+        nested["nested"]["temp_c"] = 99.0
+        town.state["weather"]["condition"] = "rain"
+        self.assertEqual(snap["weather"]["condition"], "sun")
+        self.assertEqual(snap["weather"]["extra"]["nested"]["temp_c"], 20.0)
+
+    def test_validate_export_path_rejects_empty_and_missing_parent(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_export_path("")
+        with self.assertRaises(ValueError):
+            validate_export_path("   ")
+        with self.assertRaises(ValueError):
+            validate_export_path("/no/such/parent/dir/out.json")
+
+    def test_cli_export_bad_path_exits_2_before_run(self) -> None:
+        import taro.tinytown.run as run_mod
+
+        original = run_mod.load_systems
+        called = {"n": 0}
+
+        def fake_load(**_kwargs):
+            called["n"] += 1
+            return []
+
+        run_mod.load_systems = fake_load
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                cli(["--export", "   ", "--days", "1"])
+            self.assertEqual(ctx.exception.code, 2)
+            self.assertEqual(called["n"], 0)
+
+            with self.assertRaises(SystemExit) as ctx2:
+                cli(["--export", "/no/such/parent/town.json", "--days", "1"])
+            self.assertEqual(ctx2.exception.code, 2)
+            self.assertEqual(called["n"], 0)
+        finally:
+            run_mod.load_systems = original
 
     def test_write_timeline_exact_path(self) -> None:
         import tempfile

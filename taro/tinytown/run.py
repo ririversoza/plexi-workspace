@@ -9,6 +9,7 @@ and optional ``--export PATH`` for a compact JSON timeline.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import importlib
 import sys
@@ -59,6 +60,7 @@ __all__ = [
     "shop_leaderboard",
     "shops_with_balance",
     "snapshot_day",
+    "validate_export_path",
     "write_timeline",
 ]
 
@@ -67,7 +69,8 @@ def load_systems(*, disable_log_files: bool = False) -> List[Any]:
     """Import every catalogued system package; skip anything not installed.
 
     When ``disable_log_files`` is true, the log system is constructed with
-    ``csv_path=None`` so it never writes ``events.csv`` (used by ``--seeds``).
+    ``csv_path=None`` so it never writes ``events.csv`` (used by ``--seeds``
+    and ``--export``).
     """
     loaded: List[Any] = []
     for name, module_path in SYSTEM_MODULES.items():
@@ -432,7 +435,7 @@ def snapshot_day(town: Town) -> Dict[str, Any]:
     for key in ("weather", "economy", "traffic", "emergency"):
         state = town.state.get(key)
         if isinstance(state, dict):
-            entry[key] = dict(state)
+            entry[key] = copy.deepcopy(state)
 
     businesses = town.state.get("businesses")
     if isinstance(businesses, dict):
@@ -464,12 +467,33 @@ def snapshot_day(town: Town) -> Dict[str, Any]:
 
 
 def count_events_by_kind(town: Town) -> Dict[str, int]:
-    """Count emitted events by ``kind`` (compact; not the full event list)."""
+    """Count emitted events by ``system.kind`` (compact; not the full event list)."""
     counts: Dict[str, int] = {}
     for event in town.events:
+        system = event.get("system")
+        system_key = "" if system is None else str(system)
         kind = str(event.get("kind", ""))
-        counts[kind] = counts.get(kind, 0) + 1
+        key = f"{system_key}.{kind}"
+        counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+def validate_export_path(path: str) -> None:
+    """Reject empty paths and missing parent directories before the town runs.
+
+    Raises ``ValueError`` with a clear message on failure. Parent ``.`` (cwd)
+    and an empty parent (bare filename) are allowed.
+    """
+    if path is None or not str(path).strip():
+        raise ValueError("--export path must not be empty")
+    target = Path(path)
+    parent = target.parent
+    if str(parent) in ("", "."):
+        return
+    if not parent.exists():
+        raise ValueError(f"--export parent directory does not exist: {parent}")
+    if not parent.is_dir():
+        raise ValueError(f"--export parent is not a directory: {parent}")
 
 
 def build_timeline(
@@ -501,7 +525,7 @@ def main(
     export_path: Optional[str] = None,
 ) -> Town:
     """Run the town. Default stdout unchanged; ``export_path`` adds a JSON file."""
-    systems = load_systems()
+    systems = load_systems(disable_log_files=export_path is not None)
     units_sold: Dict[str, int] = {}
     daily: List[Dict[str, Any]] = []
 
@@ -588,7 +612,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def cli(argv: Optional[Sequence[str]] = None) -> Any:
     """CLI entry: default argv preserves today's plain-run stdout."""
-    args = parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.export is not None:
+        try:
+            validate_export_path(args.export)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(2) from exc
     if args.seeds is not None:
         table, rows = run_seeds_report(args.seeds, days=args.days)
         print(table)

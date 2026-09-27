@@ -88,7 +88,7 @@ python3 -m unittest discover -s taro/tinytown -t .
 | `--days N` | `90` | simulation length |
 | `--quiet` | off | final report only (no daily lines) |
 | `--seeds A-B` | off | quiet multi-seed robustness table |
-| `--export PATH` | off | write compact JSON timeline to PATH (stdout unchanged) |
+| `--export PATH` | off | write compact JSON timeline to PATH (stdout unchanged; disables event-log CSV) |
 
 `--seeds` disables log file writes (`csv_path=None`), tracks max consecutive `$0` shop balances with a read-only feature (no extra `town.rng` draws), and prints one row per seed: seed, shops with balance > 0 on the last day, max `$0` streak, average wallet, treasury, PASS/FAIL against Phase 2 targets (≥5 shops solvent, max `$0` streak ≤3, avg wallet < $600), then `X of N seeds pass`.
 
@@ -96,7 +96,7 @@ Scratch and run output belong in `$TMPDIR`, never in the repo.
 
 ### `--export PATH` timeline schema
 
-Writes **one** JSON file to the exact `PATH` (and only when `--export` is given). No extra `town.rng` draws. Plain runs without the flag never write this file and keep the same stdout bytes.
+Writes **one** JSON file to the exact `PATH` (and only when `--export` is given). No extra `town.rng` draws. Plain runs without the flag never write this file and keep the same stdout bytes. Export also disables the event-log CSV (`csv_path=None`) so only the JSON timeline is written. The path is validated up front (non-empty; parent directory must exist) and rejected with exit code 2 before the town runs.
 
 Top level:
 
@@ -106,7 +106,7 @@ Top level:
 | `days` | int | final day index (= length of `daily`) |
 | `systems` | string[] | installed system names, in load order |
 | `daily` | object[] | one compact snapshot per day |
-| `events_by_kind` | object | `{kind: count}` over `town.events` (not the full list) |
+| `events_by_kind` | object | `{system.kind: count}` over `town.events` (not the full list; `system` is empty if missing) |
 
 Each `daily[]` entry:
 
