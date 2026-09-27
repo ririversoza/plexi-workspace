@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Mochi's corkboard of unsolved bugs, with a magnifying glass leaning on it -->
+  <!-- easel legs -->
+  <path d="M14 64 L20 44 M50 64 L44 44" stroke="#3b2a1e" stroke-width="3" stroke-linecap="round"/>
+  <!-- frame -->
+  <rect x="6" y="8" width="52" height="38" rx="3" fill="#8a5a36" stroke="#2b1d14" stroke-width="2.5"/>
+  <!-- cork -->
+  <rect x="10" y="12" width="44" height="30" rx="1.5" fill="#d9a86c" stroke="#2b1d14" stroke-width="1.5"/>
+  <circle cx="16" cy="36" r="0.9" fill="#b7844c"/>
+  <circle cx="30" cy="18" r="0.9" fill="#b7844c"/>
+  <circle cx="46" cy="38" r="0.9" fill="#b7844c"/>
+  <!-- notes -->
+  <rect x="13" y="15" width="11" height="9" fill="#fff6c9" stroke="#2b1d14" stroke-width="1" transform="rotate(-6 18 19)"/>
+  <path d="M15 18 h7 M15 20.5 h5" stroke="#6b6b6b" stroke-width="0.8"/>
+  <rect x="38" y="15" width="12" height="9" fill="#ffd9e0" stroke="#2b1d14" stroke-width="1" transform="rotate(5 44 19)"/>
+  <text x="44" y="22" font-family="monospace" font-size="5" font-weight="bold" fill="#c0392b" text-anchor="middle">FRI?</text>
+  <!-- the bug suspect -->
+  <ellipse cx="29" cy="33" rx="4" ry="5" fill="#2f3b52" stroke="#1a1a1a" stroke-width="1"/>
+  <circle cx="29" cy="27.5" r="2.2" fill="#2f3b52" stroke="#1a1a1a" stroke-width="1"/>
+  <path d="M29 28.5 v9.5" stroke="#1a1a1a" stroke-width="0.8"/>
+  <path d="M25 31 l-3 -1.5 M25 34 l-3 0 M25 37 l-3 1.5 M33 31 l3 -1.5 M33 34 l3 0 M33 37 l3 1.5" stroke="#1a1a1a" stroke-width="1" stroke-linecap="round"/>
+  <!-- red string between pins -->
+  <path d="M18 16 L29 26 L44 16 M29 26 L16 38" stroke="#d62d3a" stroke-width="1" fill="none"/>
+  <circle cx="18" cy="16" r="1.6" fill="#e74c3c" stroke="#2b1d14" stroke-width="0.8"/>
+  <circle cx="44" cy="16" r="1.6" fill="#e74c3c" stroke="#2b1d14" stroke-width="0.8"/>
+  <circle cx="29" cy="26" r="1.6" fill="#e74c3c" stroke="#2b1d14" stroke-width="0.8"/>
+  <circle cx="16" cy="38" r="1.6" fill="#e74c3c" stroke="#2b1d14" stroke-width="0.8"/>
+  <!-- magnifying glass leaning against the easel -->
+  <path d="M48 64 L54 50" stroke="#2b1d14" stroke-width="5" stroke-linecap="round"/>
+  <path d="M48 64 L54 50" stroke="#6b3f24" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="56" cy="43" r="6.5" fill="#bfe6f5" fill-opacity="0.75" stroke="#2b1d14" stroke-width="2.5"/>
+  <circle cx="56" cy="43" r="6.5" fill="none" stroke="#c9a227" stroke-width="1.2"/>
+  <path d="M53 40 q2 -2 4 -1.5" stroke="#ffffff" stroke-width="1.3" fill="none" stroke-linecap="round"/>
+</svg>
