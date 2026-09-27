@@ -294,7 +294,12 @@ def town_hall_line(days, before=None):
     parts = [f"{name} completed" for name in projects_finished(days, before)]
     project = get(days[-1], "economy", "project")
     if isinstance(project, dict) and num(project.get("progress")) is not None:
-        percent = math.floor(project["progress"] * 100)  # floor: never 100% while unfinished
+        progress = project["progress"]
+        # round() absorbs float error (0.58 * 100 == 57.999...); floor and the cap keep
+        # an unfinished project below 100%.
+        percent = math.floor(round(progress * 100, 6))
+        if progress < 1:
+            percent = min(percent, 99)
         parts.append(f"building {project.get('name', '?')} ({percent}%)")
     elif not parts:
         parts.append("no project under way")

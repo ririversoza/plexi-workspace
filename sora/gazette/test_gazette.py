@@ -183,6 +183,9 @@ class Phase3SectionsTest(unittest.TestCase):
     def test_town_hall(self):
         building = self.issue(lambda n: {"economy": {"project": {"name": "park", "progress": 0.9999}, "projects_completed": []}})
         self.assertIn("Town Hall: building park (99%)", building)
+        for progress, shown in ((0.58, "58%"), (0.999999999, "99%")):  # 0.58 * 100 == 57.999...
+            text = self.issue(lambda n: {"economy": {"project": {"name": "park", "progress": progress}}})
+            self.assertIn(f"Town Hall: building park ({shown})", text)
         done = self.issue(lambda n: {"economy": {"project": None, "projects_completed": ["park"] if n >= 3 else []}})
         self.assertIn("Town Hall: park completed", done)
         idle = self.issue(lambda n: {"economy": {"project": None, "projects_completed": ["park"]}},
