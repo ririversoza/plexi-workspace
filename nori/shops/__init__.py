@@ -61,7 +61,9 @@ SHOP_PARAMS = {
         "price_cents": 375,       # mochi PRICE_CENTS
         "unit_cost_cents": 130,   # mochi UNIT_COST_CENTS
         "capacity": 120,          # mochi CAPACITY_PER_DAY
-        "overhead_cents": 3500,   # mochi DAILY_PITCH_FEE_CENTS
+        # Phase 4 rent ($8) + licence ($2) cover most of the old $35 pitch;
+        # keep a $20 residual so seed-42 $0-streak targets still hold.
+        "overhead_cents": 2000,
     },
 }
 
@@ -80,6 +82,12 @@ LOW_FILL_PCT = 40             # sold / available across the week
 PRICE_FLOOR_PCT_OF_BASE = 80  # never below 80% of catalog base
 PRICE_CEIL_PCT_OF_BASE = 125  # never above 125% of catalog base
 MIN_MARGIN_PCT_OF_COST = 115  # never below 1.15× unit cost
+
+# Phase 4 taxes and bills (shared starting values from juniper/TINYTOWN.md).
+# No town.rng draws — pay what you can, arrears for the rest.
+SALES_TAX_PCT = 5                 # of booked revenue → treasury
+COMMERCIAL_RENT_CENTS = 800       # $8.00/day while open → out of town
+LICENCE_UTILITIES_CENTS = 200     # $2.00/day while open → treasury
 
 # Weather capacity factors when the shop stays open. Storm forces closed.
 WEATHER_AVAILABLE_FACTOR = {
@@ -118,6 +126,11 @@ def _debit(balance: int, amount: int) -> tuple[int, int]:
         return balance, 0
     paid = min(amount, balance)
     return balance - paid, paid
+
+
+def sales_tax_cents(revenue_cents: int) -> int:
+    """Integer 5% sales tax on booked revenue (no RNG)."""
+    return (max(0, revenue_cents) * SALES_TAX_PCT) // 100
 
 
 def wage_per_staff(staff_count: int, revenue_booked_cents: int) -> int:
@@ -227,6 +240,8 @@ class System:
                 "balance_cents": START_BALANCE_CENTS,
                 "sold_yesterday": 0,
                 "staff": [],
+                "tax_arrears_cents": 0,
+                "bill_arrears_cents": 0,
             }
             pending[shop_id] = 0
         town.state[self.name] = {
@@ -234,6 +249,9 @@ class System:
             "wages_paid": {},
             "open_count": len(SHOP_IDS),
             "pending_revenue_cents": pending,
+            "taxes_paid_cents": 0,
+            "bills_paid_cents": 0,
+            "arrears_cents": 0,
         }
         town.subscribe(self._capture_pending)
         town.emit(
@@ -241,6 +259,56 @@ class System:
             shops=len(SHOP_IDS),
             start_balance_cents=START_BALANCE_CENTS,
         )
+
+    def _pay_or_arrear(
+        self,
+        town,
+        shop_id: str,
+        balance: int,
+        amount: int,
+        *,
+        kind: str,
+        arrear_bucket: str,
+        shop: dict,
+    ) -> tuple[int, int]:
+        """Pay ``amount`` without overdraft; unpaid goes to arrears + event.
+
+        Returns ``(new_balance, paid)``. ``arrear_bucket`` is
+        ``tax_arrears_cents`` or ``bill_arrears_cents``.
+        """
+        if amount <= 0:
+            return balance, 0
+        balance, paid = _debit(balance, amount)
+        unpaid = amount - paid
+        if unpaid > 0:
+            shop[arrear_bucket] = _nonneg_int(shop.get(arrear_bucket)) + unpaid
+            town.emit(
+                "missed_shop_bill",
+                shop_id=shop_id,
+                bill_kind=kind,
+                needed=amount,
+                paid=paid,
+                unpaid=unpaid,
+            )
+        return balance, paid
+
+    def _pay_arrears(
+        self, town, shop_id: str, shop: dict, balance: int
+    ) -> tuple[int, int, int]:
+        """Pay tax arrears then bill arrears first. Returns balance, tax_paid, bill_paid."""
+        tax_paid = 0
+        bill_paid = 0
+        tax_due = _nonneg_int(shop.get("tax_arrears_cents"))
+        if tax_due > 0:
+            balance, paid = _debit(balance, tax_due)
+            shop["tax_arrears_cents"] = tax_due - paid
+            tax_paid = paid
+        bill_due = _nonneg_int(shop.get("bill_arrears_cents"))
+        if bill_due > 0:
+            balance, paid = _debit(balance, bill_due)
+            shop["bill_arrears_cents"] = bill_due - paid
+            bill_paid = paid
+        return balance, tax_paid, bill_paid
 
     def tick(self, town) -> None:
         self._town = town
@@ -255,12 +323,17 @@ class System:
         if not isinstance(people, list):
             people = []
 
-        # --- 1. Book exactly one unsettled purchase-day (one-day lag)
+        taxes_paid_today = 0
+        bills_paid_today = 0
+
+        # --- 1. Book revenue (one-day lag). COGS/restock comes after bills.
         pending, units, settled_day = self._batch_to_settle(town, state, shops, residents)
         settled_revenue: dict[str, int] = {shop_id: 0 for shop_id in SHOP_IDS}
+        sold_by_shop: dict[str, int] = {shop_id: 0 for shop_id in SHOP_IDS}
         for shop_id in SHOP_IDS:
             shop = shops[shop_id]
-            params = SHOP_PARAMS[shop_id]
+            shop.setdefault("tax_arrears_cents", 0)
+            shop.setdefault("bill_arrears_cents", 0)
             revenue = _nonneg_int(pending.get(shop_id))
             sold = _nonneg_int(units.get(shop_id))
             if revenue > 0 and sold == 0:
@@ -268,20 +341,30 @@ class System:
                 sold = (revenue // price) if price else 0
             shop["sold_yesterday"] = sold
             settled_revenue[shop_id] = revenue
+            sold_by_shop[shop_id] = sold
 
             balance = shop["balance_cents"]
             balance = _credit(balance, revenue)
             if revenue > 0:
                 self.revenue_booked_total_cents += revenue
-            cogs = sold * params["unit_cost_cents"]
-            balance, cogs_paid = _debit(balance, cogs)
-            if cogs_paid < cogs:
-                town.emit(
-                    "cogs_short",
-                    shop_id=shop_id,
-                    needed=cogs,
-                    paid=cogs_paid,
-                )
+
+            # --- 2. Sales tax on booked revenue (5%)
+            tax = sales_tax_cents(revenue)
+            balance, paid = self._pay_or_arrear(
+                town,
+                shop_id,
+                balance,
+                tax,
+                kind="sales_tax",
+                arrear_bucket="tax_arrears_cents",
+                shop=shop,
+            )
+            taxes_paid_today += paid
+
+            # --- 3. Arrears first (tax arrears, then bill arrears)
+            balance, tax_a, bill_a = self._pay_arrears(town, shop_id, shop, balance)
+            taxes_paid_today += tax_a
+            bills_paid_today += bill_a
             shop["balance_cents"] = balance
 
         if settled_day is not None:
@@ -298,7 +381,7 @@ class System:
                     sold = _nonneg_int(shops[shop_id]["sold_yesterday"])
                     self._week_stats[shop_id].append((sold, y_avail))
 
-        # --- 2. Staff lists from residents.jobs
+        # --- 4. Staff lists from residents.jobs
         staff_by_shop: dict[str, list] = {shop_id: [] for shop_id in SHOP_IDS}
         for person in people:
             if not isinstance(person, dict):
@@ -311,7 +394,7 @@ class System:
             staff.sort()
             shops[shop_id]["staff"] = staff
 
-        # --- 3. Open / available from weather + overhead affordability
+        # --- 5. Open / available; while open pay rent + licence (Phase 4)
         open_count = 0
         for shop_id in SHOP_IDS:
             shop = shops[shop_id]
@@ -337,6 +420,28 @@ class System:
                 continue
 
             balance, _ = _debit(balance, overhead)
+            # Rent + licence/utilities while open (pay what you can → arrears).
+            balance, paid = self._pay_or_arrear(
+                town,
+                shop_id,
+                balance,
+                COMMERCIAL_RENT_CENTS,
+                kind="rent",
+                arrear_bucket="bill_arrears_cents",
+                shop=shop,
+            )
+            bills_paid_today += paid
+            balance, paid = self._pay_or_arrear(
+                town,
+                shop_id,
+                balance,
+                LICENCE_UTILITIES_CENTS,
+                kind="licence",
+                arrear_bucket="bill_arrears_cents",
+                shop=shop,
+            )
+            bills_paid_today += paid
+
             capacity = params["capacity"]
             available = int(capacity * factor)
             shop["balance_cents"] = balance
@@ -347,11 +452,28 @@ class System:
         if condition == "storm":
             town.emit("shops_closed", reason="storm", open_count=0)
 
-        # --- 3b. Weekly price adjust (days 7, 14, …); open shops only; no RNG
+        # --- 6. Restock / COGS for units sold (after tax + bills)
+        for shop_id in SHOP_IDS:
+            shop = shops[shop_id]
+            params = SHOP_PARAMS[shop_id]
+            sold = sold_by_shop[shop_id]
+            cogs = sold * params["unit_cost_cents"]
+            balance = shop["balance_cents"]
+            balance, cogs_paid = _debit(balance, cogs)
+            if cogs_paid < cogs:
+                town.emit(
+                    "cogs_short",
+                    shop_id=shop_id,
+                    needed=cogs,
+                    paid=cogs_paid,
+                )
+            shop["balance_cents"] = balance
+
+        # --- 7. Weekly price adjust (days 7, 14, …); open shops only; no RNG
         if type(town.day) is int and town.day >= PRICE_WEEK_DAYS and town.day % PRICE_WEEK_DAYS == 0:
             self._apply_weekly_prices(town, shops)
 
-        # --- 4. Pay wages only on open days (base + share of booked revenue)
+        # --- 8. Pay wages only on open days (base + share of booked revenue)
         wages_paid: dict[int, int] = {}
         for shop_id in SHOP_IDS:
             shop = shops[shop_id]
@@ -375,8 +497,19 @@ class System:
                     )
             shop["balance_cents"] = balance
 
+        arrears_total = 0
+        for shop_id in SHOP_IDS:
+            shop = shops[shop_id]
+            tax_a = _nonneg_int(shop.get("tax_arrears_cents"))
+            bill_a = _nonneg_int(shop.get("bill_arrears_cents"))
+            shop["arrears_cents"] = tax_a + bill_a
+            arrears_total += tax_a + bill_a
+
         state["wages_paid"] = wages_paid
         state["open_count"] = open_count
+        state["taxes_paid_cents"] = taxes_paid_today
+        state["bills_paid_cents"] = bills_paid_today
+        state["arrears_cents"] = arrears_total
         self._prev_available = {
             shop_id: _nonneg_int(shops[shop_id]["available"]) for shop_id in SHOP_IDS
         }
@@ -385,6 +518,9 @@ class System:
             open_count=open_count,
             condition=condition,
             wages_total=sum(wages_paid.values()),
+            taxes_paid_cents=taxes_paid_today,
+            bills_paid_cents=bills_paid_today,
+            arrears_cents=arrears_total,
         )
 
     def _apply_weekly_prices(self, town, shops: dict) -> None:
@@ -506,6 +642,10 @@ __all__ = [
     "START_BALANCE_CENTS",
     "WAGE_BASE_CENTS",
     "WAGE_REVENUE_SHARE_PCT",
+    "SALES_TAX_PCT",
+    "COMMERCIAL_RENT_CENTS",
+    "LICENCE_UTILITIES_CENTS",
+    "sales_tax_cents",
     "wage_per_staff",
     "price_bounds_cents",
     "next_price_cents",
