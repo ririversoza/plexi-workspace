@@ -1,11 +1,13 @@
 import contextlib
+import importlib.util
 import io
 import os
 import random
 import tempfile
 import unittest
+from unittest import mock
 
-from mochi.tinytown import System, csvlog, inspect
+from mochi.tinytown import DEFAULT_CSV_NAME, System, csvlog, default_csv_path, inspect
 
 DAYS = 90
 
@@ -215,6 +217,68 @@ class InspectTest(LogTestCase):
 
         self.assertEqual(code, 2)
         self.assertIn("cannot read event log", err.getvalue())
+
+
+try:
+    HAS_ENGINE = importlib.util.find_spec("taro.tinytown") is not None
+except ImportError:  # the parent "taro" package itself is missing
+    HAS_ENGINE = False
+
+
+class DefaultPathTest(unittest.TestCase):
+    """A default log goes to the system temp dir and never into the cwd."""
+
+    def setUp(self):
+        self.temp_root = tempfile.TemporaryDirectory()
+        self.cwd_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_root.cleanup)
+        self.addCleanup(self.cwd_dir.cleanup)
+        # Point gettempdir() at a throwaway dir so tests never touch the real temp file.
+        patcher = mock.patch.object(tempfile, "tempdir", self.temp_root.name)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        old_cwd = os.getcwd()
+        os.chdir(self.cwd_dir.name)
+        self.addCleanup(os.chdir, old_cwd)
+
+    def expected_path(self):
+        return os.path.join(self.temp_root.name, DEFAULT_CSV_NAME)
+
+    def test_default_path_is_in_temp_dir(self):
+        self.assertEqual(default_csv_path(), self.expected_path())
+        self.assertEqual(System().csv_path, self.expected_path())
+        self.assertTrue(os.path.isabs(System().csv_path))
+
+    def test_explicit_path_and_none_are_kept(self):
+        self.assertEqual(System(csv_path="x.csv").csv_path, "x.csv")
+        self.assertIsNone(System(csv_path=None).csv_path)
+
+    def test_default_run_creates_nothing_in_cwd(self):
+        town = FakeTown([NoisySystem(), System()])
+        town.run()
+
+        self.assertEqual(os.listdir(self.cwd_dir.name), [])
+        self.assertEqual(town.state["log"]["csv_path"], self.expected_path())
+        self.assertEqual(csvlog.read_events(self.expected_path()), town.events)
+
+    def test_inspect_defaults_to_the_same_file(self):
+        csvlog.write_events(self.expected_path(), [{"day": 4, "system": "weather", "kind": "sun"}])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = inspect.main(["4"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("Day 4: 1 event", out.getvalue())
+
+    @unittest.skipUnless(HAS_ENGINE, "taro.tinytown engine not installed")
+    def test_default_engine_run_creates_nothing_in_cwd(self):
+        from taro.tinytown import run_town
+        from taro.tinytown.run import load_systems
+
+        town = run_town(load_systems())
+
+        self.assertEqual(os.listdir(self.cwd_dir.name), [])
+        self.assertEqual(csvlog.read_events(self.expected_path()), town.events)
 
 
 if __name__ == "__main__":

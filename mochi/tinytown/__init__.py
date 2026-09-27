@@ -1,8 +1,17 @@
-"""Tiny Town event log: records every event the town emits and writes events.csv."""
+"""Tiny Town event log: records every event the town emits and writes it as CSV."""
+
+import os
+import tempfile
 
 from mochi.tinytown import csvlog
 
-DEFAULT_CSV_PATH = "events.csv"
+DEFAULT_CSV_NAME = "tinytown-events.csv"
+_DEFAULT = object()
+
+
+def default_csv_path():
+    """Where a default run writes its log: the system temp dir, never the cwd."""
+    return os.path.join(tempfile.gettempdir(), DEFAULT_CSV_NAME)
 
 
 class System:
@@ -16,8 +25,9 @@ class System:
 
     name = "log"
 
-    def __init__(self, csv_path=DEFAULT_CSV_PATH):
-        self.csv_path = csv_path
+    def __init__(self, csv_path=_DEFAULT):
+        """``csv_path``: omitted = ``default_csv_path()``; ``None`` = in-memory only."""
+        self.csv_path = default_csv_path() if csv_path is _DEFAULT else csv_path
         self._state = None
 
     def setup(self, town):
@@ -42,4 +52,4 @@ class System:
             csvlog.append_event(self.csv_path, event)
 
 
-__all__ = ["System", "DEFAULT_CSV_PATH"]
+__all__ = ["System", "DEFAULT_CSV_NAME", "default_csv_path"]
