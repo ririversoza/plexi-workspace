@@ -2,14 +2,16 @@
 
 Works with zero systems installed: still prints 90 daily lines and a final report.
 Phase 2 summaries cover residents, wallets, shops, and a shop leaderboard.
+Phase 3 adds a small argparse CLI and a multi-seed robustness table.
 """
 
 from __future__ import annotations
 
+import argparse
 import importlib
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 # Allow `python3 taro/tinytown/run.py` from the repo root.
 _ROOT = Path(__file__).resolve().parents[2]
@@ -25,23 +27,44 @@ from taro.tinytown.engine import (  # noqa: E402
     run_town,
 )
 
+# Phase 2 / 3 acceptance targets (seed-independent thresholds).
+MIN_SHOPS_OPEN = 5
+MAX_ZERO_STREAK = 3
+MAX_AVG_WALLET_CENTS = 600_00  # $600.00
+
 # Re-export for callers that import constants from the runner module.
 __all__ = [
+    "MAX_AVG_WALLET_CENTS",
+    "MAX_ZERO_STREAK",
+    "MIN_SHOPS_OPEN",
+    "build_parser",
+    "cli",
     "daily_summary",
+    "evaluate_targets",
     "final_report",
     "format_dollars",
+    "format_seeds_table",
     "load_systems",
     "log_counts",
     "main",
+    "parse_args",
+    "parse_seed_range",
+    "run_seed_metrics",
+    "run_seeds_report",
     "sales_today",
     "shop_leaderboard",
+    "shops_with_balance",
 ]
 
 
-def load_systems() -> List[Any]:
-    """Import every catalogued system package; skip anything not installed."""
+def load_systems(*, disable_log_files: bool = False) -> List[Any]:
+    """Import every catalogued system package; skip anything not installed.
+
+    When ``disable_log_files`` is true, the log system is constructed with
+    ``csv_path=None`` so it never writes ``events.csv`` (used by ``--seeds``).
+    """
     loaded: List[Any] = []
-    for module_path in SYSTEM_MODULES.values():
+    for name, module_path in SYSTEM_MODULES.items():
         try:
             module = importlib.import_module(module_path)
         except ImportError:
@@ -49,7 +72,10 @@ def load_systems() -> List[Any]:
         system_cls = getattr(module, "System", None)
         if system_cls is None:
             continue
-        loaded.append(system_cls())
+        if name == "log" and disable_log_files:
+            loaded.append(system_cls(csv_path=None))
+        else:
+            loaded.append(system_cls())
     return loaded
 
 
@@ -244,12 +270,159 @@ def _accumulate_sales(town: Town, totals: Dict[str, int]) -> None:
                     )
 
 
-def main(days: int = DEFAULT_DAYS, seed: int = DEFAULT_SEED) -> Town:
+def shops_with_balance(town: Town) -> Dict[str, int]:
+    """Map shop_id -> balance_cents for every shop present today."""
+    businesses = town.state.get("businesses")
+    if not isinstance(businesses, dict):
+        return {}
+    shops = businesses.get("shops")
+    if not isinstance(shops, dict):
+        return {}
+    out: Dict[str, int] = {}
+    for shop_id, shop in shops.items():
+        if isinstance(shop, dict):
+            out[str(shop_id)] = int(shop.get("balance_cents") or 0)
+    return out
+
+
+def _update_zero_streaks(
+    balances: Dict[str, int],
+    current: Dict[str, int],
+    maxima: Dict[str, int],
+) -> None:
+    """Read-only streak bookkeeping: no town.rng draws."""
+    for shop_id, balance in balances.items():
+        if balance == 0:
+            streak = current.get(shop_id, 0) + 1
+            current[shop_id] = streak
+            maxima[shop_id] = max(maxima.get(shop_id, 0), streak)
+        else:
+            current[shop_id] = 0
+            maxima.setdefault(shop_id, 0)
+
+
+def evaluate_targets(
+    *,
+    shops_open: int,
+    max_zero_streak: int,
+    avg_wallet_cents: Optional[int],
+) -> bool:
+    """Phase 2/3 acceptance: open shops, $0 streak, and wallet cap."""
+    if shops_open < MIN_SHOPS_OPEN:
+        return False
+    if max_zero_streak > MAX_ZERO_STREAK:
+        return False
+    if avg_wallet_cents is None or avg_wallet_cents >= MAX_AVG_WALLET_CENTS:
+        return False
+    return True
+
+
+def run_seed_metrics(
+    seed: int,
+    *,
+    days: int = DEFAULT_DAYS,
+) -> Dict[str, Any]:
+    """Run one quiet seed with log files disabled; return robustness metrics."""
+    systems = load_systems(disable_log_files=True)
+    units_sold: Dict[str, int] = {}
+    zero_current: Dict[str, int] = {}
+    zero_max: Dict[str, int] = {}
+
+    def on_day(town: Town) -> None:
+        _accumulate_sales(town, units_sold)
+        _update_zero_streaks(shops_with_balance(town), zero_current, zero_max)
+
+    town = run_town(systems, days=days, seed=seed, on_day=on_day)
+    balances = shops_with_balance(town)
+    shops_open = sum(1 for balance in balances.values() if balance > 0)
+    max_zero = max(zero_max.values()) if zero_max else 0
+    residents = town.state.get("residents") if isinstance(town.state.get("residents"), dict) else None
+    avg_wallet = None
+    if residents is not None and residents.get("avg_wallet_cents") is not None:
+        avg_wallet = int(residents["avg_wallet_cents"])
+    economy = town.state.get("economy") if isinstance(town.state.get("economy"), dict) else None
+    treasury = economy.get("treasury") if economy is not None else None
+    passed = evaluate_targets(
+        shops_open=shops_open,
+        max_zero_streak=max_zero,
+        avg_wallet_cents=avg_wallet,
+    )
+    return {
+        "seed": seed,
+        "shops_open": shops_open,
+        "max_zero_streak": max_zero,
+        "avg_wallet_cents": avg_wallet,
+        "treasury": treasury,
+        "pass": passed,
+        "town": town,
+        "systems": systems,
+        "units_sold": units_sold,
+        "zero_max_by_shop": dict(zero_max),
+    }
+
+
+def format_seeds_table(rows: Sequence[Dict[str, Any]]) -> str:
+    """Render the robustness table plus ``X of N seeds pass``."""
+    header = (
+        f"{'seed':>4}  {'shops':>5}  {'max_$0':>6}  "
+        f"{'avg_wallet':>10}  {'treasury':>10}  result"
+    )
+    lines = [header]
+    passed = 0
+    for row in rows:
+        if row.get("pass"):
+            passed += 1
+        wallet = row.get("avg_wallet_cents")
+        wallet_s = format_dollars(wallet) if wallet is not None else "?"
+        treasury = row.get("treasury")
+        treasury_s = "?" if treasury is None else str(treasury)
+        result = "PASS" if row.get("pass") else "FAIL"
+        lines.append(
+            f"{int(row['seed']):>4}  {int(row['shops_open']):>5}  "
+            f"{int(row['max_zero_streak']):>6}  {wallet_s:>10}  "
+            f"{treasury_s:>10}  {result}"
+        )
+    total = len(rows)
+    lines.append(f"{passed} of {total} seeds pass")
+    return "\n".join(lines)
+
+
+def run_seeds_report(
+    seeds: Iterable[int],
+    *,
+    days: int = DEFAULT_DAYS,
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """Run each seed quietly and return (table_text, row_dicts)."""
+    rows = [run_seed_metrics(seed, days=days) for seed in seeds]
+    # Drop heavy objects before returning rows for callers that only need metrics.
+    slim = [
+        {
+            "seed": row["seed"],
+            "shops_open": row["shops_open"],
+            "max_zero_streak": row["max_zero_streak"],
+            "avg_wallet_cents": row["avg_wallet_cents"],
+            "treasury": row["treasury"],
+            "pass": row["pass"],
+            "zero_max_by_shop": row["zero_max_by_shop"],
+        }
+        for row in rows
+    ]
+    return format_seeds_table(slim), slim
+
+
+def main(
+    days: int = DEFAULT_DAYS,
+    seed: int = DEFAULT_SEED,
+    *,
+    quiet: bool = False,
+) -> Town:
+    """Run the town. Default (quiet=False) prints every daily line + final report."""
     systems = load_systems()
     units_sold: Dict[str, int] = {}
 
     def on_day(town: Town) -> None:
-        print(daily_summary(town))
+        if not quiet:
+            print(daily_summary(town))
         _accumulate_sales(town, units_sold)
 
     town = run_town(systems, days=days, seed=seed, on_day=on_day)
@@ -257,5 +430,76 @@ def main(days: int = DEFAULT_DAYS, seed: int = DEFAULT_SEED) -> Town:
     return town
 
 
+def parse_seed_range(text: str) -> range:
+    """Parse ``A-B`` into an inclusive ``range(A, B+1)``."""
+    if "-" not in text:
+        raise argparse.ArgumentTypeError(
+            f"expected A-B seed range, got {text!r}"
+        )
+    left, right = text.split("-", 1)
+    try:
+        start = int(left)
+        end = int(right)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"expected integer seed range A-B, got {text!r}"
+        ) from exc
+    if end < start:
+        raise argparse.ArgumentTypeError(
+            f"seed range end must be >= start, got {text!r}"
+        )
+    return range(start, end + 1)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Argparse for ``python3 -m taro.tinytown.run``."""
+    parser = argparse.ArgumentParser(
+        prog="taro.tinytown.run",
+        description="Run the Tiny Town simulation (Taro engine).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_SEED,
+        metavar="N",
+        help=f"RNG seed (default {DEFAULT_SEED})",
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=DEFAULT_DAYS,
+        metavar="N",
+        help=f"days to simulate (default {DEFAULT_DAYS})",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="print the final report only (no daily lines)",
+    )
+    parser.add_argument(
+        "--seeds",
+        type=parse_seed_range,
+        default=None,
+        metavar="A-B",
+        help="run each seed quietly and print a robustness table",
+    )
+    return parser
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    """Parse CLI argv (None → sys.argv[1:])."""
+    return build_parser().parse_args(argv)
+
+
+def cli(argv: Optional[Sequence[str]] = None) -> Any:
+    """CLI entry: default argv preserves today's plain-run stdout."""
+    args = parse_args(argv)
+    if args.seeds is not None:
+        table, rows = run_seeds_report(args.seeds, days=args.days)
+        print(table)
+        return rows
+    return main(days=args.days, seed=args.seed, quiet=args.quiet)
+
+
 if __name__ == "__main__":
-    main()
+    cli()
