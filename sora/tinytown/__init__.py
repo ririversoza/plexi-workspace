@@ -17,6 +17,7 @@ UPKEEP_PER_RESIDENT = 1.0
 # residents and businesses. bills_paid_cents is the treasury-bound share only (utilities,
 # licence); rent is reported separately and leaves town.
 PAID_KEYS = ("taxes_paid_cents", "bills_paid_cents")
+BENEFIT_PER_HEAD_CENTS = 750  # daily unemployment benefit per unemployed resident (Phase 4)
 
 DEFAULT_CONDITION = "sun"
 
@@ -66,6 +67,21 @@ def _income(town, employed, shops_open):
     return round(tax_cents / 100 + conjured, 2), round(bill_cents / 100, 2)
 
 
+def _benefits(town, unemployed, treasury):
+    """Pay today's unemployment benefits. Returns (treasury, per-head cents, total cents).
+
+    Everyone gets the same amount: the full benefit, or the most whole cents the treasury can
+    cover (emits ``benefits_short``). Never an overdraft. Residents credit it the next day.
+    """
+    if unemployed <= 0:
+        return treasury, BENEFIT_PER_HEAD_CENTS, 0
+    per_head = min(BENEFIT_PER_HEAD_CENTS, round(treasury * 100) // unemployed)
+    total = per_head * unemployed
+    if per_head < BENEFIT_PER_HEAD_CENTS:
+        town.emit("benefits_short", needed_cents=BENEFIT_PER_HEAD_CENTS * unemployed, paid_cents=total)
+    return round(treasury - total / 100, 2), per_head, total
+
+
 def _public_works(town, prev, treasury):
     """Pay today's instalment. Returns (treasury, project, projects_completed)."""
     project = prev.get("project")
@@ -102,6 +118,8 @@ class System:
             "projects_completed": [],
             "tax_income": 0.0,
             "utility_income": 0.0,
+            "benefits_paid_cents": 0,
+            "benefit_per_head_cents": 0,
         }
 
     def tick(self, town):
@@ -132,7 +150,11 @@ class System:
         if spent < upkeep:
             town.emit("budget_shortfall", needed=upkeep, spent=spent)
 
-        treasury, project, completed = _public_works(town, prev, round(available - spent, 2))
+        treasury = round(available - spent, 2)
+        per_head = benefits = 0
+        if _paid(town, "residents") is not None:  # only a Phase 4 residents system credits benefits
+            treasury, per_head, benefits = _benefits(town, population - employed, treasury)
+        treasury, project, completed = _public_works(town, prev, treasury)
 
         town.state[self.name] = {
             "population": population,
@@ -143,4 +165,6 @@ class System:
             "projects_completed": completed,
             "tax_income": tax_income,
             "utility_income": utility_income,
+            "benefits_paid_cents": benefits,
+            "benefit_per_head_cents": per_head,
         }

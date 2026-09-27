@@ -141,7 +141,7 @@ class TaxesTest(unittest.TestCase):
             businesses={"taxes_paid_cents": {"fold-post": 105, "matcha-mile": 0}, "bills_paid_cents": 800},
         )
         self.assertEqual((eco["tax_income"], eco["utility_income"]), (13.39, 188.0))
-        self.assertEqual(eco["treasury"], 1061.39)  # 1000 + 201.39 - 120 upkeep - 20 park instalment
+        self.assertEqual(eco["treasury"], 946.39)  # 1000 + 201.39 - 120 upkeep - 18 x 7.50 benefits
 
     def test_each_source_falls_back_on_its_own(self):
         residents_only = self.day_one(residents={"taxes_paid_cents": 500, "bills_paid_cents": 0})
@@ -153,7 +153,7 @@ class TaxesTest(unittest.TestCase):
         zero = {"taxes_paid_cents": 0, "bills_paid_cents": 0}
         eco = self.day_one(residents=zero, businesses=zero)
         self.assertEqual((eco["tax_income"], eco["utility_income"]), (0.0, 0.0))
-        self.assertEqual(eco["treasury"], 880.0)  # only upkeep left; no project below the reserve
+        self.assertEqual(eco["treasury"], 745.0)  # 1000 - 120 upkeep - 135 benefits; no project below the reserve
 
     def test_malformed_amounts_count_as_zero_never_conjured(self):
         for bad in (-500, True, "500", 5.5, None, [500], {"a": -1, "b": "x"}):
@@ -165,15 +165,17 @@ class TaxesTest(unittest.TestCase):
         self.assertEqual((eco["tax_income"], eco["utility_income"]), (0.3, 0.01))
 
     def test_treasury_gets_exactly_what_was_paid(self):
-        """Conservation: over 90 days the treasury moves by what was paid minus upkeep, to the cent."""
+        """Conservation: over 90 days the treasury moves by what was paid in, minus upkeep and benefits, to the cent."""
         paid = lambda day: {
-            "residents": {**self.PEOPLE, "taxes_paid_cents": 1000 + day, "bills_paid_cents": 18000 - day},
+            "residents": {**self.PEOPLE, "taxes_paid_cents": 1000 + day, "bills_paid_cents": 28000 - day},
             "businesses": {"open_count": 6, "taxes_paid_cents": {"a": 37 * day}, "bills_paid_cents": 1200},
         }
         with mock.patch("sora.tinytown.PROJECTS", ()):
-            *_, town = run(others=paid)
-        received = sum(1000 + d + 18000 - d + 37 * d + 1200 for d in range(1, 91))
-        self.assertEqual(round(town.state["economy"]["treasury"] * 100), 100_000 + received - 90 * 120 * 100)
+            towns = [town.state["economy"] for town in run(others=paid)]
+        received = sum(1000 + d + 28000 - d + 37 * d + 1200 for d in range(1, 91))
+        benefits = sum(eco["benefits_paid_cents"] for eco in towns)
+        self.assertEqual(benefits, 90 * 18 * 750)  # never short here
+        self.assertEqual(round(towns[-1]["treasury"] * 100), 100_000 + received - 90 * 120 * 100 - benefits)
 
     def test_no_rng_draws_and_no_overdraft_with_real_keys(self):
         zero = {"taxes_paid_cents": 0, "bills_paid_cents": 0}
@@ -182,6 +184,28 @@ class TaxesTest(unittest.TestCase):
             self.assertGreaterEqual(town.state["economy"]["treasury"], 0)
         self.assertEqual(town.rng.random(), random.Random(42).random())
         self.assertIn("budget_shortfall", [e["kind"] for e in town.events])
+
+    def test_benefits_paid_per_unemployed_resident(self):
+        eco = self.day_one(residents={"taxes_paid_cents": 0})
+        self.assertEqual((eco["benefits_paid_cents"], eco["benefit_per_head_cents"]), (18 * 750, 750))
+
+    def test_no_benefits_without_phase4_residents(self):
+        self.assertEqual(self.day_one()["benefits_paid_cents"], 0)  # nobody would credit them
+        self.assertEqual(self.day_one(businesses={"taxes_paid_cents": 0})["benefits_paid_cents"], 0)
+
+    def test_short_treasury_pays_everyone_the_same_whole_cents(self):
+        town = FakeTown()
+        economy = System()
+        economy.setup(town)
+        town.state["economy"]["treasury"] = 120.0 + 100.0  # upkeep, then $100 for 18 people
+        town.state["residents"] = {**self.PEOPLE, "taxes_paid_cents": 0, "bills_paid_cents": 0}
+        town.state["businesses"] = {"open_count": 6, "taxes_paid_cents": 0, "bills_paid_cents": 0}
+        economy.tick(town)
+        eco = town.state["economy"]
+        self.assertEqual((eco["benefit_per_head_cents"], eco["benefits_paid_cents"]), (555, 18 * 555))
+        self.assertEqual(eco["treasury"], 0.1)  # 10 cents can't be split 18 ways
+        self.assertIn({"needed_cents": 13500, "paid_cents": 9990},
+                      [{k: e[k] for k in ("needed_cents", "paid_cents")} for e in town.events if e["kind"] == "benefits_short"])
 
     def test_setup_exposes_the_new_keys(self):
         town = FakeTown()

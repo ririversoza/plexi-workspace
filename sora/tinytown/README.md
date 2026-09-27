@@ -16,6 +16,8 @@ The town's people, jobs, shops, budget and public works. Follows the contract in
 | `projects_completed` | list of str | finished projects, in build order |
 | `tax_income` | float ≥ 0 | today's taxes received, in dollars rounded to the cent |
 | `utility_income` | float ≥ 0 | today's utility and licence payments received, in dollars rounded to the cent |
+| `benefits_paid_cents` | int ≥ 0 | unemployment benefits debited from the treasury today (residents credit them the next day) |
+| `benefit_per_head_cents` | int ≥ 0 | what each unemployed resident gets for today: 750, less if the treasury was short, 0 when none are paid |
 
 **Reads** (read-only, in `tick` only; each is optional):
 
@@ -42,7 +44,9 @@ Each key is used on its own: if it's missing or not an int, that one value falls
    - Income is added first, then upkeep is paid out of what's available.
    - **No overdraft:** spending is capped at the money on hand. If upkeep can't be covered in full, the town spends everything it has, the treasury lands at exactly 0, and `budget_shortfall` is emitted (`needed`, `spent`). Unpaid upkeep isn't carried over as debt.
 
-5. **Public works** (after upkeep, no RNG):
+   - **Unemployment benefit (Phase 4, after upkeep):** only when `residents` reports `taxes_paid_cents`/`bills_paid_cents`, so a residents system that credits it is there. Each unemployed resident (`residents.count − residents.employed`, as read today) gets $7.50 (`BENEFIT_PER_HEAD_CENTS`). If the treasury can't cover everyone, the per-head amount drops to the most whole cents it can pay each (the leftover cents stay), and `benefits_short {needed_cents, paid_cents}` is emitted. It never overdraws. `benefits_paid_cents = benefit_per_head_cents × unemployed`, so residents can credit it exactly.
+
+5. **Public works** (after upkeep and benefits, no RNG):
    - Projects are funded one at a time, in this fixed order: `park` $200, `bike lane` $300, `market square` $400.
    - The next project starts (`project_started {name, cost}`) on the first day the treasury is above the **reserve of $1,000** (the starting treasury).
    - Each day it pays an instalment of `min($20, cost left, treasury − reserve)`. Spending never takes the treasury below the reserve, so it can't overdraw. On days at or below the reserve, the project pauses.
@@ -79,4 +83,4 @@ The $780 difference in the treasury is exactly what the projects cost: $200 + $3
 python3 -m unittest discover -s sora/tinytown -t .
 ```
 
-These run with a fake town and no engine, and cover determinism, per-day bounds, storms closing shops, no overdraft from an empty treasury, and running with weather missing. Economy v2 tests cover reading `residents` and `businesses`, each one alone, missing or malformed keys, the employed cap, no RNG draws when both are present, and no overdraft with Phase 2 numbers. Public works tests cover building the list in order with the right events, daily progress and the reserve, nothing starting at or below the reserve, only the treasury changing (same RNG state and other keys as a run with no projects, and the difference equals the amount paid), and older state without the project keys. Tax tests cover the fallback formula, real keys replacing it, each source falling back on its own, zero payments meaning zero income, malformed amounts, summing cents before converting (10 + 20 cents is exactly 0.3), 90-day conservation to the cent, no RNG draws and no overdraft with the real keys, and the new keys at setup.
+These run with a fake town and no engine, and cover determinism, per-day bounds, storms closing shops, no overdraft from an empty treasury, and running with weather missing. Economy v2 tests cover reading `residents` and `businesses`, each one alone, missing or malformed keys, the employed cap, no RNG draws when both are present, and no overdraft with Phase 2 numbers. Public works tests cover building the list in order with the right events, daily progress and the reserve, nothing starting at or below the reserve, only the treasury changing (same RNG state and other keys as a run with no projects, and the difference equals the amount paid), and older state without the project keys. Tax tests cover the fallback formula, real keys replacing it, each source falling back on its own, zero payments meaning zero income, malformed amounts, summing cents before converting (10 + 20 cents is exactly 0.3), 90-day conservation to the cent, no RNG draws and no overdraft with the real keys, benefits per unemployed resident, no benefits without Phase 4 residents, a short treasury paying everyone the same whole cents, and the new keys at setup.
