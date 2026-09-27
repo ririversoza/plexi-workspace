@@ -65,11 +65,44 @@ By system: weather 1, traffic 1
 Day `0` shows setup events. A day with no events prints `nothing happened (0 events)`.
 A missing or malformed CSV exits with status 2 and a message on stderr.
 
+## Town viewer (Phase 2)
+
+```
+python3 -m mochi.tinytown.view [--day N] [--every]
+```
+
+Runs the town in-process through `taro.tinytown` (seed 42, 90 days) and draws day N
+(default 90) as ASCII; `--every` draws all 90 days in order. It is a viewer, not a
+system: it never ticks, emits or touches `town.rng`.
+
+- **Weather banner:** condition, temperature, season.
+- **Storefronts:** one box per shop in contract order (extra shop ids after, sorted):
+  open/closed, price, units sold, balance, staff names (resident ids when `residents` is
+  missing; `+N more` past 2). "sold" is today's `residents.purchases[shop]`, or the shop's
+  own `sold_yesterday` when residents isn't installed.
+- **Residents:** count, employed, average wallet, and the top 3 wallets (ties go to the
+  lower id).
+- **Ticker:** traffic, emergency, and `economy.treasury` (float dollars; every other amount
+  is integer cents).
+
+Systems come from the engine's own `SYSTEM_MODULES`, so the viewer only loads what that
+engine version ticks. Anything missing is drawn as `not built yet`, and odd or missing
+keys show `?` instead of crashing. The log is loaded with `csv_path=None`, so viewing
+never writes `events.csv`. With no engine installed at all it exits with status 1 and a
+one-line message. `--day` outside 1..90 is rejected.
+
 ## Tests
 
 ```
 python3 -m unittest discover -s mochi/tinytown -t .
 ```
+
+`test_view.py` renders synthetic Phase 2 state with no engine: every panel missing,
+Phase 1 only (no businesses or residents), businesses without residents, malformed
+values, alignment, top-wallet ties, and no mutation of state. When `taro.tinytown` is
+importable it also runs the real town: default day 90 with no files written, `--every`
+gives 90 frames in order, the same seed gives the same picture, and a single day matches
+that day's `--every` frame.
 
 They use a small fake `Town` that follows the contract interface (no engine needed) and
 cover:
